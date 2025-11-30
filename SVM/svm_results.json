@@ -1,0 +1,22 @@
+{
+    "seq_len": 128,
+    "kernels": [
+        "linear",
+        "rbf",
+        "poly",
+        "sigmoid"
+    ],
+    "C": 1.0,
+    "gamma": "scale",
+    "degree": 3,
+    "val_split": 0.2,
+    "scores": {
+        "linear": 95.0,
+        "rbf": 98.0,
+        "poly": 97.5,
+        "sigmoid": 92.5
+    },
+    "best_kernel": "rbf",
+    "best_acc": 98.0,
+    "train_size": 1000
+}
