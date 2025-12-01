@@ -1,42 +1,27 @@
 import numpy as np
+import os
+import pandas as pd
 
-def pretreat_points(pts, orientate=False, normalization=False, rectification_orientation=False):
+def load_data(files, seq_len=50, normalize=True, sigma=None, scale_shift=None, max_angle=None):
+    X_list, y_list = [], []
+    for f in files:
+        df = pd.read_csv(f, header=None)
+        pts = df.to_numpy()
 
-    if orientate:
-        mean = pts.mean(axis=0)
-        pts_centered = pts - mean
+        if normalize:
+            mean = pts.mean(axis=0)
+            std = pts.std(axis=0)
+            pts = (pts - mean) / std
+        pts = resample_points(pts, seq_len)
+        pts = augment_sequence(pts, sigma, scale_shift, max_angle)
 
-        # PCA
-        C = np.cov(pts_centered.T)
-        vals, vecs = np.linalg.eig(C)
-        pca1 = vecs[:, np.argmax(vals)]
-        pca2 = vecs[:,1]
-        pca3 = np.cross(pca1, pca2) + 10**(-6)
+        X_list.append(pts.astype(np.float32))
+        label = int(os.path.basename(f).split("_")[1])
+        y_list.append(label)
 
-        # Rotation
-        R = np.column_stack((pca1, pca2, pca3))
-        R = R.T 
-
-        pts = pts_centered@ R.T
-    
-    if normalization:
-        mean = pts.mean(axis=0)
-        std = pts.std(axis=0)
-        pts = (pts - mean) / std
-    
-    if rectification_orientation: # Only meaningful if orientated
-        # Put the first point "at the top of the image" (as we often start a number)
-        first_point = pts[0]
-        if first_point[0] < 0: 
-            theta = np.pi 
-            Rx = np.array([
-                [np.cos(theta), 0, -np.sin(theta)],
-                [0, 1, 0],
-                [np.sin(theta), 0, np.cos(theta)]
-            ])
-            pts = pts @ Rx.T
-
-    return pts
+    X = np.stack(X_list)
+    y = np.array(y_list)
+    return X, y
 
 def resample_points(pts, seq_len):
     N = pts.shape[0]
@@ -52,3 +37,33 @@ def resample_points(pts, seq_len):
         pts_resampled[:, i] = np.interp(target_positions, orig_positions, pts[:, i])
     
     return pts_resampled
+
+def augment_sequence(seq, sigma=None, scale_shift=None, max_angle=None):
+    seq = seq.copy()
+
+    if sigma:
+        seq += np.random.normal(0, sigma, size=seq.shape)
+
+    if scale_shift:
+        scale = np.random.uniform(1-scale_shift, 1+scale_shift)
+        seq *= scale
+
+    if max_angle:
+        angle = np.random.uniform(-max_angle, max_angle) * np.pi / 180.0
+        cos_a = np.cos(angle)
+        sin_a = np.sin(angle)
+        Rz = np.array([
+            [cos_a, -sin_a, 0],
+            [sin_a,  cos_a, 0],
+            [0,      0,     1]
+        ])
+        seq = seq @ Rz.T
+
+    return seq
+
+def one_hot_encode(y, num_classes):
+    return np.eye(num_classes)[y]
+
+
+
+

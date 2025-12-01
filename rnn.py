@@ -1,59 +1,64 @@
-#!/usr/bin/env python3
-
-import glob
-import os
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
-
-from pretreat_points import pretreat_points, resample_points
 
 class RNN:
-    def __init__(self, input_size, hidden_size, output_size, lr=1e-3, adam=False, seed=1):
+    def __init__(self, input_size, hidden_size, output_size, lr=1e-3, adam=False, num_layers=1, seed=1):
         rng = np.random.RandomState(seed)
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
-        self.Wxh = rng.randn(hidden_size, input_size) * np.sqrt(1 / input_size)
-        self.Whh = rng.randn(hidden_size, hidden_size) * np.sqrt(1 / hidden_size) # Xavier/Glorot initialization
-        self.Why = rng.randn(output_size, hidden_size) * np.sqrt(1 / hidden_size)
-        self.bh = np.zeros((hidden_size, 1))
-        self.by = np.zeros((output_size, 1))
+        self.num_layers = num_layers
         self.lr = lr
+
+        self.Wxh = []
+        self.Whh = []
+        self.bh = []
+
+        layer_input_size = input_size
+        for l in range(num_layers):
+            self.Wxh.append(rng.randn(hidden_size, layer_input_size) * np.sqrt(1 / layer_input_size))
+            self.Whh.append(rng.randn(hidden_size, hidden_size) * np.sqrt(1 / hidden_size))
+            self.bh.append(np.zeros((hidden_size, 1)))
+            layer_input_size = hidden_size
+
+        self.Why = rng.randn(output_size, hidden_size) * np.sqrt(1 / hidden_size)
+        self.by = np.zeros((output_size, 1))
 
         self.adam = adam
         if adam:
             self.beta1 = 0.9
             self.beta2 = 0.999
             self.eps = 1e-8
-            self.t = 0 
+            self.t = 0
 
-            self.m_Wxh = np.zeros_like(self.Wxh)
-            self.v_Wxh = np.zeros_like(self.Wxh)
-
-            self.m_Whh = np.zeros_like(self.Whh)
-            self.v_Whh = np.zeros_like(self.Whh)
+            # Adam parameters per layer
+            self.m_Wxh = [np.zeros_like(w) for w in self.Wxh]
+            self.v_Wxh = [np.zeros_like(w) for w in self.Wxh]
+            self.m_Whh = [np.zeros_like(w) for w in self.Whh]
+            self.v_Whh = [np.zeros_like(w) for w in self.Whh]
+            self.m_bh = [np.zeros_like(b) for b in self.bh]
+            self.v_bh = [np.zeros_like(b) for b in self.bh]
 
             self.m_Why = np.zeros_like(self.Why)
             self.v_Why = np.zeros_like(self.Why)
-
-            self.m_bh = np.zeros_like(self.bh)
-            self.v_bh = np.zeros_like(self.bh)
-
             self.m_by = np.zeros_like(self.by)
             self.v_by = np.zeros_like(self.by)
 
     def forward(self, X):
         batch, seq_len, _ = X.shape
-        h = np.zeros((batch, seq_len + 1, self.hidden_size))
+        h_layers = [np.zeros((batch, seq_len + 1, self.hidden_size)) for _ in range(self.num_layers)]
+
         for t in range(seq_len):
-            xt = X[:, t, :].reshape(batch, -1)
-            pre = xt.dot(self.Wxh.T) + h[:, t, :].dot(self.Whh.T) + self.bh.T
-            h[:, t + 1, :] = np.tanh(pre)
-        logits = h[:, -1, :].dot(self.Why.T) + self.by.T
-        return h, logits
+            x_t = X[:, t, :]
+            for l in range(self.num_layers):
+                h_prev = h_layers[l][:, t, :]
+                pre = x_t.dot(self.Wxh[l].T) + h_prev.dot(self.Whh[l].T) + self.bh[l].T
+                h_t = np.tanh(pre)
+                h_layers[l][:, t + 1, :] = h_t
+                x_t = h_t  # input for next layer
+
+        logits = h_layers[-1][:, -1, :].dot(self.Why.T) + self.by.T
+        self.h_layers = h_layers
+        return h_layers, logits
 
     def softmax(self, logits):
         exp = np.exp(logits - np.max(logits, axis=1, keepdims=True))
@@ -64,50 +69,61 @@ class RNN:
         batch = y_true.shape[0]
         loss = -np.sum(y_true * np.log(probs + 1e-12)) / batch
         return loss, probs
-    
-    def bptt_update(self, X, h, logits, y_true):
+
+    def bptt_update(self, X, h_layers, logits, y_true):
         batch, seq_len, _ = X.shape
         probs = self.softmax(logits)
         dy = (probs - y_true) / batch
 
-        dWxh = np.zeros_like(self.Wxh)
-        dWhh = np.zeros_like(self.Whh)
+        dWxh = [np.zeros_like(w) for w in self.Wxh]
+        dWhh = [np.zeros_like(w) for w in self.Whh]
+        dbh = [np.zeros_like(b) for b in self.bh]
         dWhy = np.zeros_like(self.Why)
-        dbh = np.zeros_like(self.bh)
         dby = np.zeros_like(self.by)
 
-        h_last = h[:, -1, :].reshape(batch, self.hidden_size)
-        dWhy += dy.T.dot(h_last)
-        dby += dy.T.sum(axis=1, keepdims=True)
-
-        dh_next = dy.dot(self.Why)
+        dh_next_layers = [np.zeros((batch, self.hidden_size)) for _ in range(self.num_layers)]
+        dh_next_layers[-1] = dy.dot(self.Why)
 
         for t in reversed(range(seq_len)):
-            ht = h[:, t + 1, :]
-            ht_prev = h[:, t, :]
-            dt = dh_next * (1 - ht**2)
-            dbh += dt.T.sum(axis=1, keepdims=True)
-            xt = X[:, t, :].reshape(batch, -1)
-            dWxh += dt.T.dot(xt)
-            dWhh += dt.T.dot(ht_prev)
-            dh_next = dt.dot(self.Whh)
+            dh = dh_next_layers[-1]
+            for l in reversed(range(self.num_layers)):
+                ht = h_layers[l][:, t + 1, :]
+                ht_prev = h_layers[l][:, t, :]
+                dt = dh * (1 - ht**2)
+                dbh[l] += dt.T.sum(axis=1, keepdims=True)
+                xt = X[:, t, :] if l == 0 else h_layers[l-1][:, t + 1, :]
+                dWxh[l] += dt.T.dot(xt)
+                dWhh[l] += dt.T.dot(ht_prev)
+                dh_next = dt.dot(self.Whh[l])
+                if l > 0:
+                    dh_next_layers[l-1] += dh_next
+                dh = dh_next
 
-        for grad in (dWxh, dWhh, dWhy, dbh, dby):
-            np.clip(grad, -5, 5, out=grad)
+        dWhy += dy.T.dot(h_layers[-1][:, -1, :])
+        dby += dy.T.sum(axis=1, keepdims=True)
 
+        # Clip gradients properly
+        for l in range(self.num_layers):
+            for grad in (dWxh[l], dWhh[l], dbh[l]):
+                np.clip(grad, -5, 5, out=grad)
+        np.clip(dWhy, -5, 5, out=dWhy)
+        np.clip(dby, -5, 5, out=dby)
+
+        # Update weights
         if self.adam:
             self.t += 1
-            self.adam_update(self.Wxh, dWxh, self.m_Wxh, self.v_Wxh)
-            self.adam_update(self.Whh, dWhh, self.m_Whh, self.v_Whh)
+            for l in range(self.num_layers):
+                self.adam_update(self.Wxh[l], dWxh[l], self.m_Wxh[l], self.v_Wxh[l])
+                self.adam_update(self.Whh[l], dWhh[l], self.m_Whh[l], self.v_Whh[l])
+                self.adam_update(self.bh[l], dbh[l], self.m_bh[l], self.v_bh[l])
             self.adam_update(self.Why, dWhy, self.m_Why, self.v_Why)
-            self.adam_update(self.bh,  dbh,  self.m_bh,  self.v_bh)
-            self.adam_update(self.by,  dby,  self.m_by,  self.v_by)
-
+            self.adam_update(self.by, dby, self.m_by, self.v_by)
         else:
-            self.Wxh -= self.lr * dWxh
-            self.Whh -= self.lr * dWhh
+            for l in range(self.num_layers):
+                self.Wxh[l] -= self.lr * dWxh[l]
+                self.Whh[l] -= self.lr * dWhh[l]
+                self.bh[l] -= self.lr * dbh[l]
             self.Why -= self.lr * dWhy
-            self.bh -= self.lr * dbh
             self.by -= self.lr * dby
 
     def adam_update(self, param, grad, m, v):
@@ -117,177 +133,6 @@ class RNN:
         v_hat = v / (1 - self.beta2 ** self.t)
         param -= self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
 
-def load_data(files, seq_len=50):
-    X_list, y_list = [], []
-    for f in files:
-        df = pd.read_csv(f, header=None)
-        pts = df.to_numpy()
-        mean = pts.mean(axis=0)
-        std = pts.std(axis=0)
-        pts = (pts - mean) / std
-        pts = resample_points(pts, seq_len)
-        X_list.append(pts.astype(np.float32))
-
-        label = int(os.path.basename(f).split("_")[1])
-        y_list.append(label)
-    X = np.stack(X_list)
-    y = np.array(y_list)
-    return X, y
-
-def one_hot_encode(y, num_classes):
-    return np.eye(num_classes)[y]
-
-def train_rnn_model(X, y, batch_size=32, epochs=30, lr=0.001, hidden_size=64, test_split=0.2, adam=False, verbose=True):
-    num_classes = 10
-    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=test_split, random_state=1)
-    y_train = one_hot_encode(y_train, num_classes)
-    n_train = X_train.shape[0]
-
-    rnn = RNN(input_size=X.shape[2], hidden_size=hidden_size, output_size=num_classes, lr=lr, adam=adam)
-
-    losses, accs = [], []
-
-    for epoch in range(1, epochs + 1):
-        idx = np.random.permutation(n_train)
-        X_shuffled = X_train[idx]
-        y_shuffled = y_train[idx]
-
-        epoch_loss = 0.0
-
-        for i in range(0, n_train, batch_size):
-            xb = X_shuffled[i:i + batch_size]
-            yb = y_shuffled[i:i + batch_size]
-            h, logits = rnn.forward(xb)
-            loss, _ = rnn.cross_entropy_loss(logits, yb)
-            epoch_loss += loss * xb.shape[0]
-            rnn.bptt_update(xb, h, logits, yb)
-
-        epoch_loss /= n_train
-        losses.append(epoch_loss)
-
-        # Evaluate on validation set
-        _, y_val_pred = rnn.forward(X_val)
-        y_val_pred_labels = np.argmax(y_val_pred, axis=1)
-        acc = np.mean(y_val_pred_labels == y_val)
-        accs.append(acc)
-
-        if verbose:
-            print(f"Epoch {epoch}/{epochs} - Loss: {epoch_loss:.6f} - Validation Accuracy: {acc:.4f}")
-
-    return rnn, accs, losses
-
-def save_rnn_model(model, path):
-    saving = {
-        "input_size": model.input_size,
-        "hidden_size": model.hidden_size,
-        "output_size": model.output_size,
-        "lr": model.lr,
-        "adam": model.adam,
-
-        "Wxh": model.Wxh,
-        "Whh": model.Whh,
-        "Why": model.Why,
-        "bh": model.bh,
-        "by": model.by,
-    }
-
-    if model.adam:
-        saving.update({
-            "beta1": model.beta1,
-            "beta2": model.beta2,
-            "eps": model.eps,
-            "t": model.t,
-
-            "m_Wxh": model.m_Wxh,
-            "v_Wxh": model.v_Wxh,
-            "m_Whh": model.m_Whh,
-            "v_Whh": model.v_Whh,
-            "m_Why": model.m_Why,
-            "v_Why": model.v_Why,
-            "m_bh": model.m_bh,
-            "v_bh": model.v_bh,
-            "m_by": model.m_by,
-            "v_by": model.v_by,
-        })
-
-    np.savez(path, **saving)
-    print(f"Model saved to: {path}")
 
 
-def load_rnn_model(path):
-    data = np.load(path)
 
-    model = RNN(
-        input_size=int(data["input_size"]),
-        hidden_size=int(data["hidden_size"]),
-        output_size=int(data["output_size"]),
-        lr=float(data["lr"]),
-        adam=bool(data["adam"]),
-    )
-
-    model.Wxh = data["Wxh"]
-    model.Whh = data["Whh"]
-    model.Why = data["Why"]
-    model.bh = data["bh"]
-    model.by = data["by"]
-
-    if model.adam:
-        model.beta1 = float(data["beta1"])
-        model.beta2 = float(data["beta2"])
-        model.eps = float(data["eps"])
-        model.t = int(data["t"])
-
-        model.m_Wxh = data["m_Wxh"]
-        model.v_Wxh = data["v_Wxh"]
-        model.m_Whh = data["m_Whh"]
-        model.v_Whh = data["v_Whh"]
-        model.m_Why = data["m_Why"]
-        model.v_Why = data["v_Why"]
-        model.m_bh = data["m_bh"]
-        model.v_bh = data["v_bh"]
-        model.m_by = data["m_by"]
-        model.v_by = data["v_by"]
-
-    print(f"Model loaded from: {path}")
-    return model
-
-
-if __name__ == "__main__":
-    files = sorted(glob.glob("digits_3d/training_data/stroke_*_*.csv"))
-    X, y = load_data(files, seq_len=50)
-    num_classes = 10
-    X_train, X_test, y_train_labels, y_test_labels = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    rnn_model, accs, losses = train_rnn_model(
-        X_train, y_train_labels, batch_size=32, epochs=100, lr=0.001, hidden_size=128, test_split=0.5, adam=True
-    )
-    save_rnn_model(rnn_model, "rnn_model.npz")
-
-    # Plot training
-    fig, ax1 = plt.subplots()
-    ax1.set_xlabel('Epoch')
-    ax1.set_ylabel('Test Accuracy', color='blue')
-    ax1.plot(accs, color='blue', label='Test Accuracy')
-    ax1.tick_params(axis='y', labelcolor='blue')
-
-    ax2 = ax1.twinx()
-    ax2.set_ylabel('Loss', color='red')
-    ax2.plot(losses, color='red', label='Loss')
-    ax2.tick_params(axis='y', labelcolor='red')
-
-    lines_1, labels_1 = ax1.get_legend_handles_labels()
-    lines_2, labels_2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc='best')
-    plt.title('LSTM Training Loss and Test Accuracy')
-    plt.show()
-
-    # Confusion matrix
-    _, y_pred_test = rnn_model.forward(X_test)
-    y_pred_test_labels = np.argmax(y_pred_test, axis=1)
-    acc = np.mean(y_pred_test_labels == y_test_labels)
-    print(f"Accuracy on test set: {acc}")
-    cm = confusion_matrix(y_test_labels, y_pred_test_labels)
-    disp = ConfusionMatrixDisplay(confusion_matrix=cm)
-    disp.plot(cmap=plt.cm.Blues)
-    plt.title("Confusion Matrix on Test Set")
-    plt.show()
