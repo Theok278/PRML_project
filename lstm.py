@@ -7,7 +7,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
-import torch
 
 from pretreat_points import pretreat_points, resample_points
 
@@ -232,6 +231,47 @@ def train_lstm_model(X, y, batch_size=32, epochs=30, lr=0.001, hidden_size=64, t
 
     return lstm, accs, losses
 
+def save_model(model, path):
+    saving = {
+        "Wf": model.Wf,
+        "Wi": model.Wi,
+        "Wo": model.Wo,
+        "Wc": model.Wc,
+        "Wy": model.Wy,
+
+        "bf": model.bf,
+        "bi": model.bi,
+        "bo": model.bo,
+        "bc": model.bc,
+        "by": model.by,
+
+        "input_size": model.input_size,
+        "hidden_size": model.hidden_size,
+        "output_size": model.output_size
+    }
+    np.savez(path, **saving)
+
+def load_model(path, adam):
+    data = np.load(path)
+    model = LSTM(
+        input_size=int(data["input_size"]),
+        hidden_size=int(data["hidden_size"]),
+        output_size=int(data["output_size"]),
+        adam=adam
+    )
+    model.Wf = data["Wf"]
+    model.Wi = data["Wi"]
+    model.Wo = data["Wo"]
+    model.Wc = data["Wc"]
+    model.Wy = data["Wy"]
+
+    model.bf = data["bf"]
+    model.bi = data["bi"]
+    model.bo = data["bo"]
+    model.bc = data["bc"]
+    model.by = data["by"]
+
+    return model
 
 if __name__ == "__main__":
     files = sorted(glob.glob("digits_3d/training_data/stroke_*_*.csv"))
@@ -242,7 +282,7 @@ if __name__ == "__main__":
     lstm_model, accs, losses = train_lstm_model(
         X_train, y_train_labels, batch_size=32, epochs=30, lr=0.001, hidden_size=64, test_split=0.5, adam=True
     )
-    torch.save(lstm_model, "lstm_model.pth")
+    save_model(lstm_model, "lstm_model.pth")
 
     # Plot training
     fig, ax1 = plt.subplots()

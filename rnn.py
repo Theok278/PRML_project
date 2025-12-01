@@ -7,7 +7,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
-import torch
 
 from pretreat_points import pretreat_points, resample_points
 
@@ -177,6 +176,81 @@ def train_rnn_model(X, y, batch_size=32, epochs=30, lr=0.001, hidden_size=64, te
 
     return rnn, accs, losses
 
+def save_rnn_model(model, path):
+    saving = {
+        "input_size": model.input_size,
+        "hidden_size": model.hidden_size,
+        "output_size": model.output_size,
+        "lr": model.lr,
+        "adam": model.adam,
+
+        "Wxh": model.Wxh,
+        "Whh": model.Whh,
+        "Why": model.Why,
+        "bh": model.bh,
+        "by": model.by,
+    }
+
+    if model.adam:
+        saving.update({
+            "beta1": model.beta1,
+            "beta2": model.beta2,
+            "eps": model.eps,
+            "t": model.t,
+
+            "m_Wxh": model.m_Wxh,
+            "v_Wxh": model.v_Wxh,
+            "m_Whh": model.m_Whh,
+            "v_Whh": model.v_Whh,
+            "m_Why": model.m_Why,
+            "v_Why": model.v_Why,
+            "m_bh": model.m_bh,
+            "v_bh": model.v_bh,
+            "m_by": model.m_by,
+            "v_by": model.v_by,
+        })
+
+    np.savez(path, **saving)
+    print(f"Model saved to: {path}")
+
+
+def load_rnn_model(path):
+    data = np.load(path)
+
+    model = RNN(
+        input_size=int(data["input_size"]),
+        hidden_size=int(data["hidden_size"]),
+        output_size=int(data["output_size"]),
+        lr=float(data["lr"]),
+        adam=bool(data["adam"]),
+    )
+
+    model.Wxh = data["Wxh"]
+    model.Whh = data["Whh"]
+    model.Why = data["Why"]
+    model.bh = data["bh"]
+    model.by = data["by"]
+
+    if model.adam:
+        model.beta1 = float(data["beta1"])
+        model.beta2 = float(data["beta2"])
+        model.eps = float(data["eps"])
+        model.t = int(data["t"])
+
+        model.m_Wxh = data["m_Wxh"]
+        model.v_Wxh = data["v_Wxh"]
+        model.m_Whh = data["m_Whh"]
+        model.v_Whh = data["v_Whh"]
+        model.m_Why = data["m_Why"]
+        model.v_Why = data["v_Why"]
+        model.m_bh = data["m_bh"]
+        model.v_bh = data["v_bh"]
+        model.m_by = data["m_by"]
+        model.v_by = data["v_by"]
+
+    print(f"Model loaded from: {path}")
+    return model
+
 
 if __name__ == "__main__":
     files = sorted(glob.glob("digits_3d/training_data/stroke_*_*.csv"))
@@ -187,7 +261,7 @@ if __name__ == "__main__":
     rnn_model, accs, losses = train_rnn_model(
         X_train, y_train_labels, batch_size=32, epochs=100, lr=0.001, hidden_size=128, test_split=0.5, adam=True
     )
-    torch.save(rnn_model, "rnn_model.pth")
+    save_rnn_model(rnn_model, "rnn_model.npz")
 
     # Plot training
     fig, ax1 = plt.subplots()

@@ -1,3 +1,4 @@
 digits_3d/
 *.pth
 __pycache__/
+*.npz
