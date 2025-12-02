@@ -2,7 +2,7 @@ import numpy as np
 import os
 import pandas as pd
 
-def load_data(files, seq_len=50, normalize=True, sigma=None, scale_shift=None, max_angle=None):
+def load_data(files, seq_len=50, normalize=True, sigma=None, scale_shift=None, max_angle=None, deltas=False):
     X_list, y_list = [], []
     for f in files:
         df = pd.read_csv(f, header=None)
@@ -14,6 +14,8 @@ def load_data(files, seq_len=50, normalize=True, sigma=None, scale_shift=None, m
             pts = (pts - mean) / std
         pts = resample_points(pts, seq_len)
         pts = augment_sequence(pts, sigma, scale_shift, max_angle)
+        if deltas:
+            pts = add_deltas(pts)
 
         X_list.append(pts.astype(np.float32))
         label = int(os.path.basename(f).split("_")[1])
@@ -64,6 +66,9 @@ def augment_sequence(seq, sigma=None, scale_shift=None, max_angle=None):
 def one_hot_encode(y, num_classes):
     return np.eye(num_classes)[y]
 
-
+def add_deltas(seq):
+    deltas = np.diff(seq, axis=0, prepend=seq[0:1])
+    seq_with_deltas = np.concatenate([seq, deltas], axis=1)
+    return seq_with_deltas
 
 
