@@ -1,0 +1,236 @@
+{
+  "best_config": {
+    "seq_len": 128,
+    "batch_size": 16,
+    "epochs": 20,
+    "num_classes": 10,
+    "momentum": 0.9,
+    "weight_decay": 0.05,
+    "mlp_ratio": null,
+    "optimizer": "adamw",
+    "scheduler": "warmup_cosine",
+    "warmup_epochs": 5,
+    "min_lr": 1e-06,
+    "eta_min": null,
+    "pos_encoding": "sinusoidal",
+    "supcon_weight": 0.0,
+    "temperature": 0.07,
+    "projection_dim": 128,
+    "projection_hidden_dim": 256,
+    "lr": 0.001,
+    "d_model": 64,
+    "nhead": 4,
+    "num_layers": 2,
+    "dropout": 0.1,
+    "augmentation": null,
+    "movement_features": "concat"
+  },
+  "best_result": {
+    "config": {
+      "seq_len": 128,
+      "batch_size": 16,
+      "epochs": 20,
+      "num_classes": 10,
+      "momentum": 0.9,
+      "weight_decay": 0.05,
+      "mlp_ratio": null,
+      "optimizer": "adamw",
+      "scheduler": "warmup_cosine",
+      "warmup_epochs": 5,
+      "min_lr": 1e-06,
+      "eta_min": null,
+      "pos_encoding": "sinusoidal",
+      "supcon_weight": 0.0,
+      "temperature": 0.07,
+      "projection_dim": 128,
+      "projection_hidden_dim": 256,
+      "lr": 0.001,
+      "d_model": 64,
+      "nhead": 4,
+      "num_layers": 2,
+      "dropout": 0.1,
+      "augmentation": null,
+      "movement_features": "concat"
+    },
+    "avg_final_val_loss": 0.11154444676819605,
+    "avg_final_val_acc": 0.966,
+    "avg_best_val_loss": 0.09590851664050344,
+    "avg_best_val_acc": 0.975,
+    "std_final_val_acc": 0.015620499351813323,
+    "std_best_val_acc": 0.01341640786499875,
+    "fold_results": [
+      {
+        "final_val_loss": 0.14804799001448857,
+        "final_val_acc": 0.95,
+        "best_val_loss": 0.10611433364271433,
+        "best_val_acc": 0.98
+      },
+      {
+        "final_val_loss": 0.07371171564643689,
+        "final_val_acc": 0.975,
+        "best_val_loss": 0.0613204493214065,
+        "best_val_acc": 0.975
+      },
+      {
+        "final_val_loss": 0.23195891308301847,
+        "final_val_acc": 0.945,
+        "best_val_loss": 0.21211607807719868,
+        "best_val_acc": 0.95
+      },
+      {
+        "final_val_loss": 0.07052007443260781,
+        "final_val_acc": 0.975,
+        "best_val_loss": 0.06884247107577002,
+        "best_val_acc": 0.98
+      },
+      {
+        "final_val_loss": 0.03348354066442858,
+        "final_val_acc": 0.985,
+        "best_val_loss": 0.031149251085427664,
+        "best_val_acc": 0.99
+      }
+    ],
+    "elapsed_time": 290.27576088905334
+  },
+  "all_results": [
+    {
+      "config": {
+        "seq_len": 128,
+        "batch_size": 16,
+        "epochs": 20,
+        "num_classes": 10,
+        "momentum": 0.9,
+        "weight_decay": 0.05,
+        "mlp_ratio": null,
+        "optimizer": "adamw",
+        "scheduler": "warmup_cosine",
+        "warmup_epochs": 5,
+        "min_lr": 1e-06,
+        "eta_min": null,
+        "pos_encoding": "sinusoidal",
+        "supcon_weight": 0.0,
+        "temperature": 0.07,
+        "projection_dim": 128,
+        "projection_hidden_dim": 256,
+        "lr": 0.001,
+        "d_model": 64,
+        "nhead": 4,
+        "num_layers": 2,
+        "dropout": 0.1,
+        "augmentation": null,
+        "movement_features": "concat"
+      },
+      "avg_final_val_loss": 0.11154444676819605,
+      "avg_final_val_acc": 0.966,
+      "avg_best_val_loss": 0.09590851664050344,
+      "avg_best_val_acc": 0.975,
+      "std_final_val_acc": 0.015620499351813323,
+      "std_best_val_acc": 0.01341640786499875,
+      "fold_results": [
+        {
+          "final_val_loss": 0.14804799001448857,
+          "final_val_acc": 0.95,
+          "best_val_loss": 0.10611433364271433,
+          "best_val_acc": 0.98
+        },
+        {
+          "final_val_loss": 0.07371171564643689,
+          "final_val_acc": 0.975,
+          "best_val_loss": 0.0613204493214065,
+          "best_val_acc": 0.975
+        },
+        {
+          "final_val_loss": 0.23195891308301847,
+          "final_val_acc": 0.945,
+          "best_val_loss": 0.21211607807719868,
+          "best_val_acc": 0.95
+        },
+        {
+          "final_val_loss": 0.07052007443260781,
+          "final_val_acc": 0.975,
+          "best_val_loss": 0.06884247107577002,
+          "best_val_acc": 0.98
+        },
+        {
+          "final_val_loss": 0.03348354066442858,
+          "final_val_acc": 0.985,
+          "best_val_loss": 0.031149251085427664,
+          "best_val_acc": 0.99
+        }
+      ],
+      "elapsed_time": 290.27576088905334
+    }
+  ],
+  "param_grid": {
+    "lr": [
+      0.001
+    ],
+    "d_model": [
+      64
+    ],
+    "nhead": [
+      4
+    ],
+    "num_layers": [
+      2
+    ],
+    "dropout": [
+      0.1
+    ],
+    "weight_decay": [
+      0.05
+    ],
+    "optimizer": [
+      "adamw"
+    ],
+    "scheduler": [
+      "warmup_cosine"
+    ],
+    "pos_encoding": [
+      "sinusoidal"
+    ],
+    "mlp_ratio": [
+      null
+    ],
+    "augmentation": [
+      null
+    ],
+    "movement_features": [
+      "concat"
+    ],
+    "supcon_weight": [
+      0.0
+    ],
+    "temperature": [
+      0.07
+    ],
+    "projection_dim": [
+      128
+    ],
+    "projection_hidden_dim": [
+      256
+    ]
+  },
+  "base_config": {
+    "seq_len": 128,
+    "batch_size": 16,
+    "epochs": 20,
+    "num_classes": 10,
+    "momentum": 0.9,
+    "weight_decay": 0.05,
+    "mlp_ratio": null,
+    "optimizer": "adamw",
+    "scheduler": "warmup_cosine",
+    "warmup_epochs": 5,
+    "min_lr": 1e-06,
+    "eta_min": null,
+    "pos_encoding": "sinusoidal",
+    "supcon_weight": 0.0,
+    "temperature": 0.07,
+    "projection_dim": 128,
+    "projection_hidden_dim": 256
+  },
+  "n_folds": 5,
+  "seed": 42,
+  "timestamp": "20251202_234435"
+}

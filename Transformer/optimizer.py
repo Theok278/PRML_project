@@ -18,6 +18,10 @@ class SGD:
     def step(self):
         """update parameters"""
         for param, velocity in zip(self.parameters, self.velocities):
+            # Skip frozen parameters
+            if not param.requires_grad:
+                continue
+
             # add weight decay (L2 regularization)
             if self.weight_decay > 0:
                 param.grad = param.grad + self.weight_decay * param.data
@@ -62,6 +66,10 @@ class AdamW:
         self.t += 1
 
         for param, m, v in zip(self.parameters, self.m, self.v):
+            # Skip frozen parameters
+            if not param.requires_grad:
+                continue
+
             # update biased first moment estimate
             m[:] = self.beta1 * m + (1 - self.beta1) * param.grad
 

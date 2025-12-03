@@ -1,11 +1,18 @@
 import glob
 import os
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
+
+from augmentation import (
+    AirWritingAugmentation,
+    MovementFeatureExtractor,
+    AccelerationFeatureExtractor,
+    get_input_dim
+)
 
 
 def pretreat_points(points: np.ndarray, normalization: bool = True) -> np.ndarray:
@@ -14,6 +21,11 @@ def pretreat_points(points: np.ndarray, normalization: bool = True) -> np.ndarra
         mean = points.mean(axis=0)
         std = points.std(axis=0) + 1e-6
         points = (points - mean) / std
+
+    # GLOBAL_MEAN = np.array([-15.422633, 276.60189251, -38.86954802], dtype=np.float32)
+    # GLOBAL_STD  = np.array([44.45173615, 101.60893454, 32.08909528], dtype=np.float32)  
+    # if normalization:
+    #     points = (points - GLOBAL_MEAN) / (GLOBAL_STD + 1e-6)
     return points
 
 
@@ -76,10 +88,56 @@ class DigitsStrokeDataset(Dataset):
         seq_len: int = 128,
         normalization: bool = True,
         file_list: List[str] | None = None,
+        augmentation: Optional[str] = None,  # 'light', 'medium', 'strong', or None
+        movement_features: Optional[str] = None,  # 'concat', 'replace', 'all', etc.
+        training: bool = True,
     ):
         self.data_dir = data_dir
         self.seq_len = seq_len
         self.normalization = normalization
+        self.training = training
+        self.movement_features = movement_features
+
+        # Setup augmentation (only for training)
+        if augmentation is not None and training:
+            aug_config = {
+                'light': {
+                    'rotation_range': 10.0,
+                    'scale_range': (1, 1),
+                    'translation_std': 0.0,
+                    'jitter_std': 0.0,
+                    'time_warp_sigma': 0.0,
+                    'dropout_ratio': 0.0,
+                },
+                None: {
+                    'rotation_range': 0.0,
+                    'scale_range': (1, 1),
+                    'translation_std': 0.0,
+                    'jitter_std': 0.0,
+                    'time_warp_sigma': 0.0,
+                    'dropout_ratio': 0.0,
+                },
+            }
+            assert augmentation in aug_config, f"Unknown augmentation type: {augmentation}"
+            config = aug_config.get(augmentation, aug_config[None])
+            self.augment = AirWritingAugmentation(**config)
+            print(f"Training with {augmentation} augmentation")
+        else:
+            self.augment = None
+
+        # Setup movement feature extractor (for both training and testing!)
+        if movement_features is not None:
+            if movement_features in ['concat', 'replace', 'velocity_only']:
+                self.movement_extractor = MovementFeatureExtractor(mode=movement_features)
+            elif movement_features in ['all', 'velocity_acceleration', 'acceleration_only']:
+                self.movement_extractor = AccelerationFeatureExtractor(mode=movement_features)
+            else:
+                raise ValueError(f"Unknown movement_features mode: {movement_features}")
+
+            mode_str = "training" if training else "testing"
+            print(f"{mode_str.capitalize()} with movement features: {movement_features} (input_dim={get_input_dim(movement_features)})")
+        else:
+            self.movement_extractor = None
 
         if file_list is not None:
             self.files = sorted(file_list)
@@ -91,7 +149,8 @@ class DigitsStrokeDataset(Dataset):
 
         self.labels = [self._extract_label(path) for path in self.files]
         self.num_classes = len(set(self.labels))
-        print(f"Loaded {len(self.files)} samples across {self.num_classes} classes")
+        aug_str = f" (augmentation: {augmentation})" if augmentation and training else ""
+        print(f"Loaded {len(self.files)} samples across {self.num_classes} classes{aug_str}")
 
     def _extract_label(self, path: str) -> int:
         filename = os.path.basename(path)
@@ -105,9 +164,19 @@ class DigitsStrokeDataset(Dataset):
         csv_path = self.files[idx]
         pts = pd.read_csv(csv_path, header=None).values
 
-        pts = pretreat_points(pts, normalization=self.normalization)
-        pts = resample_points(pts, self.seq_len)
 
-        seq = torch.from_numpy(pts).float()  # (seq_len, 3)
+        pts = resample_points(pts, self.seq_len) 
+
+        # 1. Apply augmentation first (only in training)
+        if self.augment is not None:
+            pts = self.augment(pts)
+
+        pts = pretreat_points(pts, normalization=self.normalization)
+
+        # 2. Extract movement features (both training and testing!)
+        if self.movement_extractor is not None:
+            pts = self.movement_extractor(pts)
+
+        seq = torch.from_numpy(pts).float()  # (seq_len, 3/6/9 depending on movement_features)
         label = torch.tensor(self.labels[idx], dtype=torch.long)
         return seq, label

@@ -1,36 +1,32 @@
-"""
-Transformer Model with Manual Backpropagation
-
-Contains FeedForward, TransformerEncoderLayer, and SimplifiedTransformer.
-"""
-
 import numpy as np
 from modules import (
-    Parameter, Linear, LayerNorm, GELU,
-    Dropout, MultiHeadAttention, PositionalEncoding
+    Parameter, Linear, LayerNorm, GELU, SiLU,
+    Dropout, MultiHeadAttention, 
+    PositionalEncoding, LearnablePositionalEncoding, ConditionalPositionalEncoding
 )
 
 
-class FeedForward:
-    """Feed-forward network (MLP) with manual backprop"""
+class MLP:
+    """Standard Feed-forward network (MLP) with GELU"""
 
-    def __init__(self, d_model: int, dim_feedforward: int, dropout: float = 0.1):
-        self.fc1 = Linear(d_model, dim_feedforward)
+    def __init__(self, d_model: int, mlp_ratio: float = None, dropout: float = 0.1):
+        dim_hidden = int(d_model * mlp_ratio)
+        self.fc1 = Linear(d_model, dim_hidden)
         self.gelu = GELU()
         self.dropout1 = Dropout(dropout)
-        self.fc2 = Linear(dim_feedforward, d_model)
-        self.dropout2 = Dropout(dropout)  # Add second dropout
+        self.fc2 = Linear(dim_hidden, d_model)
+        self.dropout2 = Dropout(dropout)
 
     def forward(self, x: np.ndarray) -> np.ndarray:
         x = self.fc1.forward(x)
         x = self.gelu.forward(x)
         x = self.dropout1.forward(x)
         x = self.fc2.forward(x)
-        x = self.dropout2.forward(x)  # Add dropout after fc2
+        x = self.dropout2.forward(x)
         return x
 
     def backward(self, grad_output: np.ndarray) -> np.ndarray:
-        grad = self.dropout2.backward(grad_output)  # Backward through dropout2
+        grad = self.dropout2.backward(grad_output)
         grad = self.fc2.backward(grad)
         grad = self.dropout1.backward(grad)
         grad = self.gelu.backward(grad)
@@ -49,17 +45,94 @@ class FeedForward:
         self.dropout2.eval()
 
 
+class SwiGLU:
+    """
+    SwiGLU: Gated Linear Unit with SiLU activation
+
+    FFN_SwiGLU(x) = (SiLU(xW_gate) ⊙ xW_value) W_out
+
+    Typically uses hidden_dim = 8/3 * d_model (≈ 2.67x)
+    """
+
+    def __init__(self, d_model: int, mlp_ratio: float = None, dropout: float = 0.1):
+        if mlp_ratio is None:
+            # Default: 8/3 * d_model for SwiGLU
+            hidden_dim = int(8 * d_model / 3)
+            # Round to nearest multiple of 8 for efficiency
+            hidden_dim = ((hidden_dim + 7) // 8) * 8
+        else:
+            hidden_dim = int(d_model * mlp_ratio)
+
+        self.d_model = d_model
+        self.hidden_dim = hidden_dim
+
+        # Gate and value projections
+        self.gate_proj = Linear(d_model, hidden_dim)
+        self.value_proj = Linear(d_model, hidden_dim)
+        self.out_proj = Linear(hidden_dim, d_model)
+
+        self.silu = SiLU()
+        self.dropout = Dropout(dropout)
+
+        # Cache for backward
+        self.cache = {}
+
+    def forward(self, x: np.ndarray) -> np.ndarray:
+        gate = self.gate_proj.forward(x)
+        gate = self.silu.forward(gate)
+
+        value = self.value_proj.forward(x)
+
+        hidden = gate * value
+
+        output = self.out_proj.forward(hidden)
+        output = self.dropout.forward(output)
+
+        self.cache = {'gate': gate, 'value': value}
+        return output
+
+    def backward(self, grad_output: np.ndarray) -> np.ndarray:
+        grad_output = self.dropout.backward(grad_output)
+
+        grad_hidden = self.out_proj.backward(grad_output)
+
+        gate = self.cache['gate']
+        value = self.cache['value']
+
+        grad_gate = grad_hidden * value
+        grad_value = grad_hidden * gate
+
+        grad_x_value = self.value_proj.backward(grad_value)
+
+        grad_gate = self.silu.backward(grad_gate)
+        grad_x_gate = self.gate_proj.backward(grad_gate)
+
+        grad_x = grad_x_gate + grad_x_value
+        return grad_x
+
+    def parameters(self):
+        return (self.gate_proj.parameters() +
+                self.value_proj.parameters() +
+                self.out_proj.parameters())
+
+    def train(self):
+        self.dropout.train()
+
+    def eval(self):
+        self.dropout.eval()
+
 class TransformerEncoderLayer:
     """Single Transformer encoder layer with manual backprop"""
 
-    def __init__(self, d_model: int, nhead: int, dim_feedforward: int, dropout: float = 0.1):
+    def __init__(self, d_model: int, nhead: int, mlp_ratio: float = None, dropout: float = 0.1):
         # Multi-head attention
         self.norm1 = LayerNorm(d_model)
         self.attn = MultiHeadAttention(d_model, nhead, dropout)
 
         # Feed-forward
         self.norm2 = LayerNorm(d_model)
-        self.ff = FeedForward(d_model, dim_feedforward, dropout)
+        # self.ffn = MLP(d_model, mlp_ratio, dropout)
+        self.ffn = SwiGLU(d_model, mlp_ratio, dropout)
 
     def forward(self, x: np.ndarray) -> np.ndarray:
         """
@@ -75,7 +148,7 @@ class TransformerEncoderLayer:
 
         # Feed-forward with residual
         ff_input = self.norm2.forward(x)
-        ff_output = self.ff.forward(ff_input)
+        ff_output = self.ffn.forward(ff_input)
         x = x + ff_output  # Residual connection
 
         return x
@@ -92,7 +165,7 @@ class TransformerEncoderLayer:
         grad_x2 = grad_output
 
         # Backward through feed-forward
-        grad_ff = self.ff.backward(grad_ff_output)
+        grad_ff = self.ffn.backward(grad_ff_output)
         grad_ff_input = self.norm2.backward(grad_ff)
         grad_x2 = grad_x2 + grad_ff_input
 
@@ -109,15 +182,14 @@ class TransformerEncoderLayer:
 
     def parameters(self):
         return (self.norm1.parameters() + self.attn.parameters() +
-                self.norm2.parameters() + self.ff.parameters())
+                self.norm2.parameters() + self.ffn.parameters())
 
     def train(self):
         self.attn.train()
-        self.ff.train()
-
+        self.ffn.train()
     def eval(self):
         self.attn.eval()
-        self.ff.eval()
+        self.ffn.eval()
 
 
 class Transformer:
@@ -130,8 +202,9 @@ class Transformer:
     """
 
     def __init__(self, input_dim: int = 3, d_model: int = 128, nhead: int = 4,
-                 num_layers: int = 2, dim_feedforward: int = 256,
-                 dropout: float = 0.1, num_classes: int = 10):
+                 num_layers: int = 2, mlp_ratio: float = None,
+                 dropout: float = 0.1, num_classes: int = 10,
+                 pos_encoding: str = 'sinusoidal'):
 
         self.input_dim = input_dim
         self.d_model = d_model
@@ -144,11 +217,20 @@ class Transformer:
         self.cls_token = Parameter(np.random.randn(1, 1, d_model).astype(np.float32) * 0.02)
 
         # Positional encoding (max_len = 513 to account for CLS token)
-        self.pos_encoder = PositionalEncoding(d_model, max_len=513)
+        
+        max_len = 513  # Account for CLS token
+        if pos_encoding == 'sinusoidal':
+            self.pos_encoder = PositionalEncoding(d_model, max_len=max_len, dropout=dropout)
+        elif pos_encoding == 'learnable':
+            self.pos_encoder = LearnablePositionalEncoding(d_model, max_len=max_len, dropout=dropout)
+        elif pos_encoding == 'conditional':
+            self.pos_encoder = ConditionalPositionalEncoding(d_model, kernel_size=3, dropout=dropout)
+        else:
+            raise ValueError(f"Unknown pos_encoding: {pos_encoding}")
 
         # Transformer layers
         self.layers = [
-            TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout)
+            TransformerEncoderLayer(d_model, nhead, mlp_ratio, dropout)
             for _ in range(num_layers)
         ]
 
@@ -250,10 +332,12 @@ class Transformer:
 
     def train(self):
         """Set to training mode"""
+        self.pos_encoder.train()
         for layer in self.layers:
             layer.train()
 
     def eval(self):
         """Set to evaluation mode"""
+        self.pos_encoder.eval()
         for layer in self.layers:
             layer.eval()

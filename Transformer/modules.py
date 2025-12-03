@@ -8,16 +8,18 @@ class Parameter:
     def __init__(self, data: np.ndarray):
         self.data = data.astype(np.float32)
         self.grad = np.zeros_like(data, dtype=np.float32)
+        self.requires_grad = True  # Flag to control gradient updates
 
     def zero_grad(self):
         self.grad.fill(0)
 
 
 class PositionalEncoding:
-    """Sinusoidal positional encoding"""
+    """Sinusoidal positional encoding (fixed)"""
 
-    def __init__(self, d_model: int, max_len: int = 512):
+    def __init__(self, d_model: int, max_len: int = 512, dropout: float = 0.0):
         self.d_model = d_model
+        self.dropout = Dropout(dropout)
 
         # pre-compute positional encodings (max_len, d_model)
         pe = np.zeros((max_len, d_model), dtype=np.float32)
@@ -49,11 +51,190 @@ class PositionalEncoding:
         """
         seq_len = x.shape[1]
         # broadcasting: (batch, seq_len, d_model) + (seq_len, d_model)
-        return x + self.pe[:seq_len, :]
+        x = x + self.pe[:seq_len, :]
+        x = self.dropout.forward(x)
+        return x
 
     def backward(self, grad_output: np.ndarray) -> np.ndarray:
         """positional encoding is fixed, gradient passes through"""
+        grad_output = self.dropout.backward(grad_output)
         return grad_output
+
+    def train(self):
+        self.dropout.train()
+
+    def eval(self):
+        self.dropout.eval()
+
+    def parameters(self):
+        return []
+
+
+class LearnablePositionalEncoding:
+    """Learnable positional encoding"""
+
+    def __init__(self, d_model: int, max_len: int = 512, dropout: float = 0.0):
+        self.d_model = d_model
+        self.max_len = max_len
+        self.dropout = Dropout(dropout)
+
+        # Learnable position embeddings
+        self.pe = Parameter(np.random.randn(max_len, d_model).astype(np.float32) * 0.02)
+
+    def forward(self, x: np.ndarray) -> np.ndarray:
+        """
+        Add learnable positional encoding to input
+
+        Args:
+            x: (batch, seq_len, d_model)
+        Returns:
+            x + positional encoding: (batch, seq_len, d_model)
+        """
+        seq_len = x.shape[1]
+        x = x + self.pe.data[:seq_len, :]
+        x = self.dropout.forward(x)
+        return x
+
+    def backward(self, grad_output: np.ndarray) -> np.ndarray:
+        """Backward through learnable PE"""
+        grad_output = self.dropout.backward(grad_output)
+
+        # Accumulate gradient for learnable PE
+        seq_len = grad_output.shape[1]
+        batch_size = grad_output.shape[0]
+
+        # Sum gradients over batch dimension
+        self.pe.grad[:seq_len, :] += grad_output.sum(axis=0)
+
+        return grad_output
+
+    def train(self):
+        self.dropout.train()
+
+    def eval(self):
+        self.dropout.eval()
+
+    def parameters(self):
+        return [self.pe]
+
+
+class ConditionalPositionalEncoding:
+    """Conditional Positional Encoding (CPE) - position-aware convolution
+
+    Instead of adding fixed/learned positional encodings, CPE uses depthwise
+    convolutions to implicitly encode position information in a data-dependent way.
+    """
+
+    def __init__(self, d_model: int, kernel_size: int = 3, dropout: float = 0.0):
+        self.d_model = d_model
+        self.kernel_size = kernel_size
+        # self.dropout = Dropout(dropout)
+
+        # Depthwise convolution (each channel processes independently)
+        # For simplicity, we'll implement 1D conv as a Linear layer applied locally
+        # Weight shape: (d_model, kernel_size)
+        self.conv_weight = Parameter(
+            np.random.randn(d_model, kernel_size).astype(np.float32) * 0.02
+        )
+        self.conv_bias = Parameter(np.zeros(d_model, dtype=np.float32))
+
+        self.padding = kernel_size // 2
+
+        # Cache for backward
+        self.cache = {}
+
+    def forward(self, x: np.ndarray) -> np.ndarray:
+        """
+        Apply conditional positional encoding
+
+        Args:
+            x: (batch, seq_len, d_model)
+        Returns:
+            output: (batch, seq_len, d_model)
+        """
+        B, N, D = x.shape
+
+        # Pad sequence for convolution
+        # Pad on both sides: (batch, seq_len + 2*padding, d_model)
+        padded = np.pad(x, ((0, 0), (self.padding, self.padding), (0, 0)),
+                       mode='constant', constant_values=0)
+
+        # Apply depthwise convolution manually
+        output = np.zeros_like(x)
+
+        for i in range(N):
+            # Extract local window: (batch, kernel_size, d_model)
+            window = padded[:, i:i+self.kernel_size, :]
+
+            # Depthwise conv: for each feature dim, convolve with corresponding kernel
+            # window: (B, K, D), conv_weight: (D, K)
+            # result: (B, D)
+            conv_out = np.sum(window * self.conv_weight.data.T[np.newaxis, :, :], axis=1)
+            output[:, i, :] = conv_out + self.conv_bias.data
+
+        # Cache for backward
+        self.cache = {'x': x, 'padded': padded, 'B': B, 'N': N, 'D': D}
+
+        # Apply dropout
+        # output = self.dropout.forward(output)
+
+        # Residual connection with input
+        return x + output
+
+    def backward(self, grad_output: np.ndarray) -> np.ndarray:
+        """Backward through CPE"""
+        # Backward through residual
+        grad_residual = grad_output
+        grad_conv_output = grad_output
+
+        # Backward through dropout
+        # grad_conv_output = self.dropout.backward(grad_conv_output)
+
+        B, N, D = self.cache['B'], self.cache['N'], self.cache['D']
+        padded = self.cache['padded']
+
+        grad_padded = np.zeros_like(padded)
+
+        for i in range(N):
+            # Get window
+            window = padded[:, i:i+self.kernel_size, :]
+
+            # Gradient w.r.t. conv_weight
+            # grad_conv_output[:, i, :]: (B, D)
+            # window: (B, K, D)
+            grad_out_i = grad_conv_output[:, i, :]  # (B, D)
+
+            # For each dimension d, grad_weight[d, :] += sum_b (grad_out[b, d] * window[b, :, d])
+            for d in range(D):
+                self.conv_weight.grad[d, :] += np.sum(
+                    grad_out_i[:, d:d+1] * window[:, :, d], axis=0
+                )
+
+            # Gradient w.r.t. bias
+            self.conv_bias.grad += grad_out_i.sum(axis=0)
+
+            # Gradient w.r.t. window (padded input)
+            # (B, K, D) contribution
+            grad_padded[:, i:i+self.kernel_size, :] += (
+                grad_out_i[:, np.newaxis, :] * self.conv_weight.data.T[np.newaxis, :, :]
+            )
+
+        # Remove padding from gradient
+        grad_input = grad_padded[:, self.padding:self.padding+N, :]
+
+        # Add gradient from residual connection
+        grad_input += grad_residual
+
+        return grad_input
+
+    def train(self):
+        self.dropout.train()
+
+    def eval(self):
+        self.dropout.eval()
+
+    def parameters(self):
+        return [self.conv_weight, self.conv_bias]
 
 
 class Linear:
@@ -217,6 +398,31 @@ class GELU:
         grad_gelu = 0.5 * (1.0 + tanh_out) + 0.5 * x * dtanh * darg
 
         return grad_output * grad_gelu
+
+
+class SiLU:
+    """SiLU (Swish) activation: x * sigmoid(x)"""
+
+    def __init__(self):
+        self.cache_input = None
+        self.cache_sigmoid = None
+
+    def forward(self, x: np.ndarray) -> np.ndarray:
+        """SiLU(x) = x * sigmoid(x)"""
+        self.cache_input = x
+        sigmoid_x = 1.0 / (1.0 + np.exp(-x))
+        self.cache_sigmoid = sigmoid_x
+        return x * sigmoid_x
+
+    def backward(self, grad_output: np.ndarray) -> np.ndarray:
+        """backward pass for SiLU"""
+        x = self.cache_input
+        sigmoid_x = self.cache_sigmoid
+
+        # d/dx[x * sigmoid(x)] = sigmoid(x) + x * sigmoid(x) * (1 - sigmoid(x))
+        grad_silu = sigmoid_x + x * sigmoid_x * (1.0 - sigmoid_x)
+
+        return grad_output * grad_silu
 
 
 class Softmax:
