@@ -6,7 +6,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PYTHON_BIN=${PYTHON:-python3}
 
-DATA_DIR=${DATA_DIR:-"${SCRIPT_DIR}/../digits_3d/training_data"}
+DATA_DIR=${DATA_DIR:-"${SCRIPT_DIR}/../../digits_3d/training_data"}
 SEQ_LEN=${SEQ_LEN:-128}
 C_VAL=${C_VAL:-5.0}
 SEED=${SEED:-0}

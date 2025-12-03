@@ -42,7 +42,7 @@ def lstm_kfold(X, y, batch_size, hidden_size, num_layers, K=5, adam=True):
 
 if __name__ == "__main__":
     np.random.seed(17)
-    files = sorted(glob.glob("digits_3d/training_data/stroke_*_*.csv"))
+    files = sorted(glob.glob("../digits_3d/training_data/stroke_*_*.csv"))
     num_classes = 10
 
     # Augmented
