@@ -56,7 +56,7 @@ if __name__ == "__main__":
 
     hidden_sizes = [96, 128, 160]
     num_layers = 2
-    batch_sizes = [8, 16, 24, 32]
+    batch_sizes = [32, 24, 16, 8]
     adam = True
 
     accs = []
@@ -70,7 +70,7 @@ if __name__ == "__main__":
                 y = ys[idx_Xy]
                 model_name = f"LSTM hs={hidden_size} bs={batch_size} - {delta_label}"
                 
-                fold_accs = lstm_kfold(X, y, batch_size, hidden_size, num_layers, K=8, adam=adam)
+                fold_accs = lstm_kfold(X, y, batch_size, hidden_size, num_layers, K=5, adam=adam)
 
                 avg_acc = fold_accs.mean()
                 std_acc = fold_accs.std()
