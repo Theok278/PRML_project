@@ -6,14 +6,14 @@ echo "=========================================="
 echo "Training start"
 echo "=========================================="
 
-python train_supcon.py \
+python train_supcon_nfold.py \
     --data_dir ../../digits_3d/training_data \
     --augmentation light \
     --movement_features concat \
     --optimizer adamw \
     --scheduler warmup_cosine \
     --pos_encoding sinusoidal \
-    --epochs 20 \
+    --epochs 2 \
     --batch_size 16 \
     --lr 0.001 \
     --weight_decay 0.05 \
@@ -24,13 +24,12 @@ python train_supcon.py \
     --num_layers 2 \
     --dropout 0.1 \
     --seq_len 128 \
-    --val_split 0.2 \
     --supcon_weight 0.5 \
     --temperature 0.05 \
     --projection_dim 32 \
     --projection_hidden_dim 32 \
     --n_folds 5 \
-    --seed 0
+    --seed 42
 
 if [ $? -eq 0 ]; then
     echo ""

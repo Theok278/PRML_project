@@ -814,12 +814,12 @@ def main():
             'scheduler': ['warmup_cosine'],
             'pos_encoding': ['sinusoidal'],
             'mlp_ratio': [None],
-            'augmentation': ['light'],
-            'movement_features': ['concat'],
+            'augmentation': [None, 'light'],
+            'movement_features': [None, 'concat'],
             # SupCon: 0.0 表示关闭；>0 表示启用 SupCon
-            'supcon_weight': [0.1, 0.3, 0.5, 0.7],
-            'temperature': [0.05, 0.07, 0.1],
-            'projection_dim': [32, 64],
+            'supcon_weight': [0.0, 0.3, 0.5, 0.7],
+            'temperature': [0.05, 0.07],
+            'projection_dim': [16, 32],
             'projection_hidden_dim': [32, 64],
         }
         param_grid = None  # 只是为了后面类型一致，不会用到

@@ -25,7 +25,7 @@ python train_main.py \
     --dropout 0.1 \
     --seq_len 128 \
     --val_split 0.2 \
-    --seed 0
+    --seed 42
 
 if [ $? -eq 0 ]; then
     echo ""
