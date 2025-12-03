@@ -13,12 +13,12 @@ from save_model import save_rnn_model
 if __name__ == "__main__":
     np.random.seed(42)
     files = sorted(glob.glob("digits_3d/training_data/stroke_*_*.csv"))
-    X, y = load_data(files, seq_len=50, normalize=True, sigma=0.02, scale_shift=0.1, max_angle=10)
+    X, y = load_data(files, seq_len=50, normalize=True, sigma=0.02, scale_shift=0.1, max_angle=10, deltas=True)
     num_classes = 10
     X_train, X_test, y_train_labels, y_test_labels = train_test_split(X, y, test_size=0.2)
 
     rnn_model, accs, losses = train_rnn_model(
-        X_train, y_train_labels, batch_size=32, epochs=100, lr=0.001, hidden_size=128, test_split=0.5, adam=True, num_layers=4
+        X_train, y_train_labels, batch_size=16, epochs=100, lr=0.001, hidden_size=64, test_split=0.2, adam=True, num_layers=2
     )
     save_rnn_model(rnn_model, "rnn_model.npz")
 
