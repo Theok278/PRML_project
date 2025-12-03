@@ -13,7 +13,7 @@ python train_supcon_nfold.py \
     --optimizer adamw \
     --scheduler warmup_cosine \
     --pos_encoding sinusoidal \
-    --epochs 2 \
+    --epochs 20 \
     --batch_size 16 \
     --lr 0.001 \
     --weight_decay 0.05 \
