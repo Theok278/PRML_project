@@ -16,7 +16,7 @@ else:
 # Global classifier instance, lazy loaded
 _classifier = None
 
-def load_parameters_strict(model, checkpoint, strict=True):
+def load_parameters_strict(model, checkpoint, strict=True, visible=False):
     """ 
     load model parameters from checkpoint with strict checking.
     Because we don't have parameter names, we match parameters by order.
@@ -53,21 +53,23 @@ def load_parameters_strict(model, checkpoint, strict=True):
         param.data[:] = ckpt_param
         loaded += 1
 
-    print(f"\n=== Parameter Load Summary ===")
-    print(f"  Loaded        : {loaded}/{total}")
-    print(f"  Missing       : {missing}")
-    print(f"  Shape mismatch: {mismatch}")
-    print(f"  Strict mode   : {strict}")
-    print("================================\n")
+    if visible:
+        print(f"\n=== Parameter Load Summary ===")
+        print(f"  Loaded        : {loaded}/{total}")
+        print(f"  Missing       : {missing}")
+        print(f"  Shape mismatch: {mismatch}")
+        print(f"  Strict mode   : {strict}")
+        print("================================\n")
 
     return loaded, missing, mismatch
 
-def load_model_from_checkpoint(checkpoint_path: Path):
+def load_model_from_checkpoint(checkpoint_path: Path, visible: bool = False):
     """
     Load Transformer model from checkpoint .npz file.
     Automatically reads model config from saved 'args' in checkpoint.
     """
-    print(f"Loading checkpoint from: {checkpoint_path}")
+    if visible:
+        print(f"Loading checkpoint from: {checkpoint_path}")
     checkpoint = np.load(checkpoint_path, allow_pickle=True)
 
     if 'args' not in checkpoint:
@@ -79,7 +81,8 @@ def load_model_from_checkpoint(checkpoint_path: Path):
     # Load config from args (including seq_len / movement_features)
     args = json.loads(str(checkpoint['args']))
 
-    print("  Loaded config from checkpoint")
+    if visible:
+        print("  Loaded config from checkpoint")
 
     # Basic Transformer config
     d_model = args.get('d_model', 128)
@@ -101,23 +104,23 @@ def load_model_from_checkpoint(checkpoint_path: Path):
     temperature = args.get('temperature', 0.07)
     projection_dim = args.get('projection_dim', 128)
     projection_hidden_dim = args.get('projection_hidden_dim', 256)
-
-    print("Model configuration:")
-    print(f"  Type: {'SupCon' if is_supcon else 'Standard'} Transformer")
-    print(f"  d_model: {d_model}")
-    print(f"  nhead: {nhead}")
-    print(f"  num_layers: {num_layers}")
-    print(f"  dropout: {dropout}")
-    print(f"  pos_encoding: {pos_encoding}")
-    print(f"  seq_len: {seq_len}")
-    print(f"  movement_features: {movement_features}")
-    print(f"  use_resample: {use_resample}")
-    if use_resample:
-        print(f"  resample_method: {resample_method}")
-    if is_supcon:
-        print(f"  supcon_weight: {supcon_weight}")
-        print(f"  temperature: {temperature}")
-        print(f"  projection_dim: {projection_dim}")
+    if visible:
+        print("Model configuration:")
+        print(f"  Type: {'SupCon' if is_supcon else 'Standard'} Transformer")
+        print(f"  d_model: {d_model}")
+        print(f"  nhead: {nhead}")
+        print(f"  num_layers: {num_layers}")
+        print(f"  dropout: {dropout}")
+        print(f"  pos_encoding: {pos_encoding}")
+        print(f"  seq_len: {seq_len}")
+        print(f"  movement_features: {movement_features}")
+        print(f"  use_resample: {use_resample}")
+        if use_resample:
+            print(f"  resample_method: {resample_method}")
+        if is_supcon:
+            print(f"  supcon_weight: {supcon_weight}")
+            print(f"  temperature: {temperature}")
+            print(f"  projection_dim: {projection_dim}")
 
     # Build model
     try:
@@ -139,7 +142,8 @@ def load_model_from_checkpoint(checkpoint_path: Path):
                 projection_hidden_dim=projection_hidden_dim
             )
             model_type = 'supcon'
-            print("  Loaded SupCon model")
+            if visible:
+                print("  Loaded SupCon model")
         else:
             from model import Transformer
             model = Transformer(
@@ -153,7 +157,8 @@ def load_model_from_checkpoint(checkpoint_path: Path):
                 pos_encoding=pos_encoding
             )
             model_type = 'standard'
-            print("  Loaded standard model")
+            if visible:
+                print("  Loaded standard model")
 
     except ImportError as e:
         raise ImportError(
@@ -162,8 +167,9 @@ def load_model_from_checkpoint(checkpoint_path: Path):
         )
 
     # Load model parameters from checkpoint with strict checking
-    loaded_count = load_parameters_strict(model, checkpoint, strict=True)
-    print(f"Model parameters loaded: {loaded_count}")
+    loaded_count = load_parameters_strict(model, checkpoint, strict=True, visible=visible)
+    if visible:
+        print(f"Model parameters loaded: {loaded_count}")
     model.eval()
 
     config = {
@@ -176,7 +182,8 @@ def load_model_from_checkpoint(checkpoint_path: Path):
         "model_type": model_type,
     }
 
-    print("Model loaded successfully!\n")
+    if visible:
+        print("Model loaded successfully!\n")
     return model, model_type, config
 
 
@@ -189,9 +196,11 @@ class DigitClassifier:
         class_label = classifier.classify(testdata)
     """
 
-    def __init__(self):
+    def __init__(self, visible: bool = False):
+        self.visible = visible
         self.model, self.model_type, self.config = load_model_from_checkpoint(
-            CHECKPOINT_PATH
+            CHECKPOINT_PATH,
+            visible=self.visible
         )
         self.seq_len = self.config["seq_len"]
         self.movement_features = self.config["movement_features"]
@@ -345,7 +354,7 @@ class DigitClassifier:
 
         return predicted_class, confidence, probabilities
 
-def digit_classify(testdata):
+def digit_classify(testdata, visible: bool = False) -> int:
     """
     digit_classify(testdata)
     ------------------------
@@ -369,7 +378,7 @@ def digit_classify(testdata):
     """
     global _classifier
     if _classifier is None:
-        _classifier = DigitClassifier()
+        _classifier = DigitClassifier(visible=visible)
     return _classifier.classify(testdata)
 
 
