@@ -1,12 +1,3 @@
-"""
-Data Augmentation for Air Writing (3D Temporal Point Clouds)
-
-Specialized augmentations for temporal 3D stroke data that preserve:
-1. Temporal order (sequence must remain intact)
-2. Stroke semantics (shape/topology should stay recognizable)
-3. Writing dynamics (speed patterns are informative)
-"""
-
 import numpy as np
 from typing import Optional, Tuple
 
@@ -14,11 +5,6 @@ from typing import Optional, Tuple
 class AirWritingAugmentation:
     """
     Augmentation suite for air writing temporal point clouds
-
-    Design principles:
-    - Preserve temporal order (no shuffling)
-    - Maintain stroke topology
-    - Simulate natural variations in writing
     """
 
     def __init__(
@@ -231,119 +217,6 @@ class AirWritingAugmentation:
 
         return interpolated
 
-
-class MixUp:
-    """
-    MixUp augmentation for point clouds
-
-    Linearly interpolates between two samples:
-        x_mixed = λ * x1 + (1-λ) * x2
-        y_mixed = λ * y1 + (1-λ) * y2
-
-    Note: Returns soft labels, requires loss that supports them
-    """
-
-    def __init__(self, alpha: float = 0.2):
-        """
-        Args:
-            alpha: Beta distribution parameter (smaller = less mixing)
-        """
-        self.alpha = alpha
-
-    def __call__(
-        self,
-        points1: np.ndarray,
-        label1: int,
-        points2: np.ndarray,
-        label2: int,
-        num_classes: int = 10
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Mix two samples
-
-        Args:
-            points1: First point cloud (N, 3)
-            label1: First label
-            points2: Second point cloud (N, 3)
-            label2: Second label
-            num_classes: Number of classes
-
-        Returns:
-            Mixed points, mixed label (one-hot)
-        """
-        # Sample mixing coefficient
-        if self.alpha > 0:
-            lam = np.random.beta(self.alpha, self.alpha)
-        else:
-            lam = 1.0
-
-        # Mix points
-        mixed_points = lam * points1 + (1 - lam) * points2
-
-        # Mix labels (one-hot)
-        mixed_label = np.zeros(num_classes, dtype=np.float32)
-        mixed_label[label1] += lam
-        mixed_label[label2] += (1 - lam)
-
-        return mixed_points, mixed_label
-
-
-class CutMix:
-    """
-    CutMix for temporal point clouds
-
-    Replaces a temporal segment from one sample with another
-    More suitable for temporal data than spatial cutout
-    """
-
-    def __init__(self, alpha: float = 1.0):
-        self.alpha = alpha
-
-    def __call__(
-        self,
-        points1: np.ndarray,
-        label1: int,
-        points2: np.ndarray,
-        label2: int,
-        num_classes: int = 10
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        CutMix two samples
-
-        Args:
-            points1: First point cloud (N, 3)
-            label1: First label
-            points2: Second point cloud (N, 3)
-            label2: Second label
-            num_classes: Number of classes
-
-        Returns:
-            Mixed points, mixed label (one-hot)
-        """
-        n_points = len(points1)
-
-        # Sample mixing ratio
-        lam = np.random.beta(self.alpha, self.alpha)
-
-        # Temporal cut size
-        cut_len = int(n_points * (1 - lam))
-
-        # Random temporal cut position
-        cut_start = np.random.randint(0, n_points - cut_len + 1)
-        cut_end = cut_start + cut_len
-
-        # Replace segment
-        mixed_points = points1.copy()
-        mixed_points[cut_start:cut_end] = points2[cut_start:cut_end]
-
-        # Mix labels
-        mixed_label = np.zeros(num_classes, dtype=np.float32)
-        mixed_label[label1] += lam
-        mixed_label[label2] += (1 - lam)
-
-        return mixed_points, mixed_label
-
-
 class MovementFeatureExtractor:
     """
     Extract rich geometric + dynamic features for handwriting trajectory.
@@ -431,58 +304,6 @@ class MovementFeatureExtractor:
             total_len_feat
         ], axis=1)  # (N, 12)
 
-
-class AccelerationFeatureExtractor:
-    """
-    Extract acceleration features from temporal point cloud data
-
-    Computes acceleration: ddx, ddy, ddz = velocity_t - velocity_(t-1)
-    Optionally includes position, velocity, and acceleration.
-    """
-
-    def __init__(self, mode: str = 'all'):
-        """
-        Args:
-            mode: 'all' - [x,y,z,dx,dy,dz,ddx,ddy,ddz] -> 9D
-                  'velocity_acceleration' - [dx,dy,dz,ddx,ddy,ddz] -> 6D
-                  'acceleration_only' - [ddx,ddy,ddz] -> 3D
-        """
-        self.mode = mode
-
-    def __call__(self, points: np.ndarray) -> np.ndarray:
-        """
-        Extract acceleration features
-
-        Args:
-            points: (N, 3) temporal point cloud
-        Returns:
-            features: (N, 3/6/9) depending on mode
-        """
-        n_points = len(points)
-
-        # First-order difference: velocity
-        velocity = np.zeros_like(points)
-        velocity[1:] = points[1:] - points[:-1]
-
-        # Second-order difference: acceleration
-        acceleration = np.zeros_like(points)
-        acceleration[1:] = velocity[1:] - velocity[:-1]
-
-        if self.mode == 'all':
-            # Position + velocity + acceleration
-            features = np.concatenate([points, velocity, acceleration], axis=-1)  # (N, 9)
-        elif self.mode == 'velocity_acceleration':
-            # Velocity + acceleration
-            features = np.concatenate([velocity, acceleration], axis=-1)  # (N, 6)
-        elif self.mode == 'acceleration_only':
-            # Only acceleration
-            features = acceleration  # (N, 3)
-        else:
-            raise ValueError(f"Unknown mode: {self.mode}")
-
-        return features.astype(np.float32)
-
-
 def get_input_dim(movement_features: str = None) -> int:
     """
     Helper function to determine input dimension based on movement features
@@ -499,9 +320,9 @@ def get_input_dim(movement_features: str = None) -> int:
         input_dim = get_input_dim('cat_dir')     # Returns 9
         input_dim = get_input_dim('all')         # Returns 12
     """
-    if movement_features in ['none', None, 'replace', 'velocity_only', 'acceleration_only']:
+    if movement_features in ['none', None]:
         return 3
-    elif movement_features in ['cat_move', 'concat', 'velocity_acceleration']:
+    elif movement_features in ['cat_move']:
         return 6
     elif movement_features in ['cat_dir']:
         return 9

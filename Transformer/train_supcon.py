@@ -65,7 +65,7 @@ def evaluate(model,
 
         # forward pass (no gradient)
         if is_supcon:
-            # SupCon 模型：只取 logits（不需要 embeddings）
+            # SupCon model returns only logits here
             logits = model.forward(batch_data, mask=batch_masks, training=False, return_embeddings=False)
         else:
             logits = model.forward(batch_data, mask=batch_masks, training=False)
@@ -293,9 +293,8 @@ def train_epoch_supcon(model: TransformerSupCon,
     Train for one epoch with SupCon + Classification (joint training)
 
     supcon_weight in [0,1]:
-        0.0 → 仅 CE（其实就退化成普通 CE）
-        0.5 → SupCon 和 CE 各一半
-        1.0 → 仅 SupCon（没有 CE）
+        0.0 = pure CE
+        0.5 = half SupCon + half CE
     """
     model.train()
 
@@ -320,7 +319,7 @@ def train_epoch_supcon(model: TransformerSupCon,
         # zero gradients
         optimizer.zero_grad()
 
-        # forward pass: 得到 embeddings + logits
+        # forward pass
         embeddings, logits = model.forward(
             batch_data,
             mask=batch_masks,
@@ -328,7 +327,7 @@ def train_epoch_supcon(model: TransformerSupCon,
             return_embeddings=True
         )
 
-        # 计算损失
+        # compute losses
         supcon_val = supcon_loss.forward(embeddings, batch_labels)
         ce_val = ce_loss.forward(logits, batch_labels)
 
@@ -338,11 +337,11 @@ def train_epoch_supcon(model: TransformerSupCon,
         total_supcon_loss += supcon_val * (end_idx - start_idx)
         total_ce_loss += ce_val * (end_idx - start_idx)
 
-        # 分类 accuracy
+        # classification accuracy
         preds = np.argmax(logits, axis=1)
         correct += (preds == batch_labels).sum()
 
-        # backward（手写梯度）
+        # backward
         grad_embeddings = supcon_loss.backward() * supcon_weight
         grad_logits = ce_loss.backward() * (1.0 - supcon_weight)
 
@@ -445,7 +444,7 @@ def main():
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    # 是否启用 SupCon
+    # SupCon
     use_supcon = args.supcon_weight > 0.0
 
     # create output directory
@@ -462,13 +461,9 @@ def main():
     print("\nLoading data...")
 
     # Handle augmentation argument
-    # Note: augmentation='none' means no augmentation, so convert to None
     augmentation = args.augmentation if args.augmentation != 'none' else None
 
     # movement_features can be 'none', 'cat_move', 'cat_dir', 'all', or None
-    # 'none' (string) means extract only x,y,z features (with normalization)
-    # None (Python None) means no feature extraction at all (no normalization)
-    # DO NOT convert 'none' string to None!
     movement_features = args.movement_features
 
     if args.use_resample:
@@ -503,23 +498,23 @@ def main():
         args.data_dir,
         seq_len=args.seq_len,
         file_list=train_files,
-        augmentation=augmentation,            # Use augmentation for training
-        movement_features=movement_features,  # Use movement features for training
+        augmentation=augmentation,
+        movement_features=movement_features,
         training=True,
-        use_resample=args.use_resample,       # Use resampling if enabled
+        use_resample=args.use_resample,
         resample_method=args.resample_method,
-        use_global_stats=args.use_global_stats  # Use global stats if enabled
+        use_global_stats=args.use_global_stats
     )
     val_dataset = DigitsStrokeDataset(
         args.data_dir,
         seq_len=args.seq_len,
         file_list=val_files,
-        augmentation=None,                   # No augmentation for validation
-        movement_features=movement_features, # But keep movement features for validation
+        augmentation=None,
+        movement_features=movement_features,
         training=False,
-        use_resample=args.use_resample,      # Same as training for consistency
+        use_resample=args.use_resample,
         resample_method=args.resample_method,
-        use_global_stats=args.use_global_stats,  # Use same global stats if enabled
+        use_global_stats=args.use_global_stats,
         feature_mean=train_dataset.feature_mean if not args.use_global_stats else None,
         feature_std=train_dataset.feature_std if not args.use_global_stats else None
     )
@@ -530,7 +525,7 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size,
                             shuffle=False, num_workers=0)
 
-    # convert to numpy arrays (do this once to avoid repeated conversion)
+    # convert to numpy arrays
     print("Converting data to numpy...")
     train_data, train_labels, train_masks = numpy_from_dataloader(train_loader)
     val_data, val_labels, val_masks = numpy_from_dataloader(val_loader)
@@ -599,13 +594,15 @@ def main():
             momentum=args.momentum,
             weight_decay=args.weight_decay
         )
-    else:  # adamw
+    elif args.optimizer == 'adamw':
         print(f"\nUsing AdamW optimizer (lr={args.lr}, weight_decay={args.weight_decay})")
         optimizer = AdamW(
             model.parameters(),
             lr=args.lr,
             weight_decay=args.weight_decay
         )
+    else:
+        raise ValueError(f"Unsupported optimizer: {args.optimizer}")
 
     # create learning rate scheduler
     if args.scheduler == 'warmup_cosine':
@@ -630,7 +627,7 @@ def main():
         scheduler = None
         print("No learning rate scheduler")
 
-    # SupCon 损失（如果启用）
+    # SupCon loss
     if use_supcon:
         supcon_loss = SupConLoss(temperature=args.temperature)
         ce_loss = CrossEntropyLoss()
@@ -741,14 +738,12 @@ def main():
     print(f"Best validation accuracy: {best_val_acc:.4f}")
     print(f"Results saved to: {output_dir}")
     print("="*60)
-    print("\n✅ All gradients were computed MANUALLY")
+    print("\nAll gradients were computed MANUALLY")
     if use_supcon:
-        print("✅ Trained with Supervised Contrastive Learning (SupCon + CE)")
+        print("Trained with Supervised Contrastive Learning (SupCon + CE)")
     else:
-        print("✅ Trained with pure Cross-Entropy")
-    print("✅ No PyTorch autograd was used!")
+        print("Trained with pure Cross-Entropy")
     print("="*60)
-
 
 if __name__ == '__main__':
     main()

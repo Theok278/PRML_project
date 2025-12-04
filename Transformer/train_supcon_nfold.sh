@@ -1,16 +1,12 @@
-#!/bin/bash
-
-# Training script with AdamW + Warmup+Cosine scheduler
-
 echo "=========================================="
-echo "Training start"
+echo "N-fold CV Training start"
 echo "=========================================="
 
 python train_supcon_nfold.py \
     --data_dir ../../digits_3d/training_data \
     --augmentation light \
     --movement_features all \
-    --resample_method temporal \
+    --resample_method arclength \
     --optimizer adamw \
     --scheduler warmup_cosine \
     --pos_encoding sinusoidal \
@@ -40,6 +36,6 @@ if [ $? -eq 0 ]; then
     echo "=========================================="
 else
     echo ""
-    echo "❌ Training failed!"
+    echo "Training failed!"
     exit 1
 fi

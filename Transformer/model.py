@@ -5,7 +5,6 @@ from modules import (
     PositionalEncoding, LearnablePositionalEncoding, ConditionalPositionalEncoding
 )
 
-
 class MLP:
     """Standard Feed-forward network (MLP) with GELU"""
 
@@ -194,13 +193,7 @@ class TransformerEncoderLayer:
 
 
 class Transformer:
-    """
-    Transformer for classification with manual backpropagation
-
-    Now includes:
-    - Positional encoding (crucial for sequence understanding)
-    - CLS token (learnable global representation)
-    """
+    """Transformer for classification with manual backpropagation"""
 
     def __init__(self, input_dim: int = 3, d_model: int = 128, nhead: int = 4,
                  num_layers: int = 2, mlp_ratio: float = None,

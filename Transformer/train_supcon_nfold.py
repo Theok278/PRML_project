@@ -65,7 +65,7 @@ def evaluate(model,
 
         # forward pass (no gradient)
         if is_supcon:
-            # SupCon 模型：只取 logits（不需要 embeddings）
+            # SupCon model returns logits
             logits = model.forward(batch_data, mask=batch_masks, training=False, return_embeddings=False)
         else:
             logits = model.forward(batch_data, mask=batch_masks, training=False)
@@ -293,9 +293,8 @@ def train_epoch_supcon(model: TransformerSupCon,
     Train for one epoch with SupCon + Classification (joint training)
 
     supcon_weight in [0,1]:
-        0.0 → 仅 CE（其实就退化成普通 CE）
-        0.5 → SupCon 和 CE 各一半
-        1.0 → 仅 SupCon（没有 CE）
+        0.0 = CE only
+        0.5 = Half SupCon, half CE
     """
     model.train()
 
@@ -328,7 +327,7 @@ def train_epoch_supcon(model: TransformerSupCon,
             return_embeddings=True
         )
 
-        # 计算损失
+        # compute losses
         supcon_val = supcon_loss.forward(embeddings, batch_labels)
         ce_val = ce_loss.forward(logits, batch_labels)
 
@@ -338,11 +337,11 @@ def train_epoch_supcon(model: TransformerSupCon,
         total_supcon_loss += supcon_val * (end_idx - start_idx)
         total_ce_loss += ce_val * (end_idx - start_idx)
 
-        # 分类 accuracy
+        # compute accuracy
         preds = np.argmax(logits, axis=1)
         correct += (preds == batch_labels).sum()
 
-        # backward（手写梯度）
+        # backward
         grad_embeddings = supcon_loss.backward() * supcon_weight
         grad_logits = ce_loss.backward() * (1.0 - supcon_weight)
 
@@ -415,12 +414,14 @@ def create_optimizer(args, model):
             momentum=args.momentum,
             weight_decay=args.weight_decay
         )
-    else:  # adamw
+    elif args.optimizer == 'adamw':
         optimizer = AdamW(
             model.parameters(),
             lr=args.lr,
             weight_decay=args.weight_decay
         )
+    else:
+        raise ValueError(f"Unknown optimizer: {args.optimizer}")
     return optimizer
 
 
@@ -454,13 +455,9 @@ def train_fold(fold, train_files, val_files, args, output_dir, use_supcon, input
     print("="*60)
 
     # Handle augmentation argument
-    # Note: augmentation='none' means no augmentation, so convert to None
     augmentation = args.augmentation if args.augmentation != 'none' else None
 
     # movement_features can be 'none', 'cat_move', 'cat_dir', 'all', or None
-    # 'none' (string) means extract only x,y,z features (with normalization)
-    # None (Python None) means no feature extraction at all (no normalization)
-    # DO NOT convert 'none' string to None!
     movement_features = args.movement_features
 
     # Create datasets for this fold
@@ -691,7 +688,7 @@ def main():
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    # 是否启用 SupCon
+    # SupCon
     use_supcon = args.supcon_weight > 0.0
 
     # create output directory
@@ -797,14 +794,10 @@ def main():
     print(f"\nResults saved to: {output_dir}")
     print("="*60)
     if use_supcon:
-        print("✅ Trained with Supervised Contrastive Learning (SupCon + CE)")
+        print("Trained with Supervised Contrastive Learning (SupCon + CE)")
     else:
-        print("✅ Trained with pure Cross-Entropy")
-    print("✅ All gradients were computed MANUALLY")
-    print("✅ Using masking for variable-length sequences")
-    print("✅ No PyTorch autograd was used!")
+        print("Trained with pure Cross-Entropy")
     print("="*60)
-
 
 if __name__ == '__main__':
     main()

@@ -1,8 +1,3 @@
-"""
-Grid Search with K-Fold Cross Validation for Hyperparameter Tuning
-(对齐 manual_backprop 训练脚本版本，支持 SupCon / TransformerSupCon)
-"""
-
 import numpy as np
 import argparse
 import json
@@ -26,10 +21,6 @@ from torch.utils.data import DataLoader
 from dataset import DigitsStrokeDataset
 from augmentation import get_input_dim
 
-
-# ------------------------------
-# K-fold 切分（和数据集文件命名一致）
-# ------------------------------
 def create_k_folds(file_list: List[str], labels: List[int],
                    n_folds: int = 5, seed: int = 42) -> List[Tuple[List[str], List[str]]]:
     """
@@ -83,19 +74,15 @@ def create_k_folds(file_list: List[str], labels: List[int],
 
     return splits
 
-
-# ------------------------------
-# 和训练脚本一致的工具函数
-# ------------------------------
 def numpy_from_dataloader(dataloader) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """convert PyTorch dataloader batch to numpy arrays"""
+    """Convert PyTorch dataloader batch to numpy arrays"""
 
     all_data = []
     all_labels = []
     all_masks = []
 
     for batch_data, batch_labels, batch_masks in dataloader:
-        # convert to numpy
+        # Convert to numpy
         all_data.append(batch_data.numpy())
         all_labels.append(batch_labels.numpy())
         all_masks.append(batch_masks.numpy())
@@ -113,7 +100,8 @@ def evaluate(model,
              masks: np.ndarray,
              batch_size: int = 32,
              is_supcon: bool = False) -> Tuple[float, float]:
-    """evaluate model on dataset"""
+    """Evaluate model on dataset"""
+    
     model.eval()
 
     num_samples = data.shape[0]
@@ -132,19 +120,19 @@ def evaluate(model,
         batch_labels = labels[start_idx:end_idx]
         batch_masks = masks[start_idx:end_idx]
 
-        # forward pass (no gradient)
+        # Forward pass (no gradient)
         if is_supcon:
-            # SupCon 模型：只要 logits，不要 embeddings
+            # SupCon model: only logits, no embeddings
             logits = model.forward(batch_data, mask=batch_masks, training=False, return_embeddings=False)
         else:
-            # 普通 Transformer
+            # Standard Transformer
             logits = model.forward(batch_data, mask=batch_masks, training=False)
 
-        # loss
+        # Loss
         loss = criterion.forward(logits, batch_labels)
         total_loss += loss * (end_idx - start_idx)
 
-        # accuracy
+        # Accuracy
         preds = np.argmax(logits, axis=1)
         correct += (preds == batch_labels).sum()
 
@@ -157,7 +145,8 @@ def evaluate(model,
 def train_epoch(model: Transformer, optimizer,
                 train_data: np.ndarray, train_labels: np.ndarray, train_masks: np.ndarray,
                 batch_size: int = 32) -> Tuple[float, float]:
-    """train for one epoch (和训练脚本一致，不在这里用 scheduler)"""
+    """Train for one epoch"""
+
     model.train()
 
     num_samples = train_data.shape[0]
@@ -217,9 +206,7 @@ def train_epoch_supcon(
     supcon_weight: float,
     batch_size: int = 32
 ) -> Dict[str, float]:
-    """
-    Train for one epoch with SupCon + Classification (manual backprop)
-    """
+    """Train for one epoch with SupCon + Classification (manual backprop)"""
     model.train()
 
     num_samples = train_data.shape[0]
@@ -261,11 +248,11 @@ def train_epoch_supcon(
         total_supcon_loss += supcon_val * (end_idx - start_idx)
         total_ce_loss += ce_val * (end_idx - start_idx)
 
-        # acc
+        # accuracy
         preds = np.argmax(logits, axis=1)
         correct += (preds == batch_labels).sum()
 
-        # backward (manual)
+        # backward
         grad_embeddings = supcon_loss.backward() * supcon_weight
         grad_logits = ce_loss.backward() * (1.0 - supcon_weight)
 
@@ -288,10 +275,6 @@ def train_epoch_supcon(
         'accuracy': float(accuracy)
     }
 
-
-# ------------------------------
-# 单个 fold 的训练（对齐训练脚本 + SupCon）
-# ------------------------------
 def train_single_fold(
     train_files: List[str],
     val_files: List[str],
@@ -300,17 +283,15 @@ def train_single_fold(
     fold_idx: int,
     verbose: bool = False
 ) -> Dict[str, float]:
-    """
-    Train model on one fold and return validation metrics
-    """
+    """Train model on one fold and return validation metrics"""
 
-    # 处理 augmentation / movement_features / use_resample（和主训练脚本一致）
+    # processing options
     augmentation = config.get('augmentation')
     movement_features = config.get('movement_features')
-    use_resample = config.get('use_resample', False)  # 消融控制：是否使用resample
+    use_resample = config.get('use_resample', False)
     print(f"Using augmentation: {augmentation}, movement_features: {movement_features}, use_resample: {use_resample}")
 
-    # 创建数据集（签名对齐 DigitsStrokeDataset 在训练脚本中的用法）
+    # build datasets
     train_dataset = DigitsStrokeDataset(
         data_dir,
         seq_len=config['seq_len'],
@@ -325,7 +306,7 @@ def train_single_fold(
         data_dir,
         seq_len=config['seq_len'],
         file_list=val_files,
-        augmentation=None,  # no augmentation for val
+        augmentation=None,
         movement_features=movement_features,
         training=False,
         use_resample=use_resample
@@ -341,18 +322,18 @@ def train_single_fold(
         shuffle=False, num_workers=0
     )
 
-    # 转成 numpy（一次性，和训练脚本一致）
+    # Convert to numpy
     train_data, train_labels, train_masks = numpy_from_dataloader(train_loader)
     val_data, val_labels, val_masks = numpy_from_dataloader(val_loader)
 
-    # 输入维度根据 movement_features 决定
+    # get input dim
     input_dim = get_input_dim(movement_features)
 
-    # 是否启用 SupCon
+    # whether to use SupCon
     supcon_weight = float(config.get('supcon_weight', 0.0))
     use_supcon = supcon_weight > 0.0
 
-    # 创建模型
+    # create model
     if use_supcon:
         model = TransformerSupCon(
             input_dim=input_dim,
@@ -386,7 +367,7 @@ def train_single_fold(
         if verbose:
             print(f"[Fold {fold_idx+1}] Using pure CE training")
 
-    # 优化器（和训练脚本完全一致）
+    # optimizer
     if config['optimizer'] == 'sgd':
         optimizer = SGD(
             model.parameters(),
@@ -403,7 +384,7 @@ def train_single_fold(
     else:
         raise ValueError(f"Unknown optimizer: {config['optimizer']}")
 
-    # 学习率调度器（和训练脚本完全一致：每 epoch 调一次 step(epoch)）
+    # learning rate scheduler
     scheduler_type = config.get('scheduler', 'warmup_cosine')
     if scheduler_type == 'warmup_cosine':
         scheduler = WarmupCosineScheduler(
@@ -423,7 +404,7 @@ def train_single_fold(
             base_lr=config['lr'],
             eta_min=eta_min
         )
-    else:  # 'none'
+    else:
         scheduler = None
 
     best_val_acc = 0.0
@@ -433,13 +414,13 @@ def train_single_fold(
     final_val_acc = None
 
     for epoch in range(config['epochs']):
-        # 每个 epoch 更新一次 LR
+        # update LR once per epoch
         if scheduler is not None:
             current_lr = scheduler.step(epoch)
         else:
             current_lr = config['lr']
 
-        # 训练一个 epoch
+        # train one epoch
         if use_supcon:
             train_stats = train_epoch_supcon(
                 model=model,
@@ -460,7 +441,7 @@ def train_single_fold(
                 batch_size=config['batch_size']
             )
 
-        # 验证
+        # validation
         val_loss, val_acc = evaluate(
             model, val_data, val_labels, val_masks,
             batch_size=config['batch_size'],
@@ -489,10 +470,6 @@ def train_single_fold(
         'best_val_acc': float(best_val_acc)
     }
 
-
-# ------------------------------
-# Grid Search with K-fold
-# ------------------------------
 def grid_search(
     data_dir: str,
     param_grid: Dict[str, List[Any]],
@@ -506,29 +483,29 @@ def grid_search(
     Perform grid search with K-fold cross validation
     """
 
-    # 输出目录
+    # output directory
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # 根据文件名获取所有样本和 label（与训练数据命名规则一致）
+    # get all samples and labels based on filenames
     all_files = sorted(glob.glob(os.path.join(data_dir, "stroke_*_*.csv")))
     all_labels = [int(os.path.basename(f).split("_")[1]) for f in all_files]
 
     if verbose:
         print(f"Found {len(all_files)} samples across {len(set(all_labels))} classes")
 
-    # K-fold 划分
+    # K-fold splits
     if verbose:
         print(f"\nCreating {n_folds}-fold stratified splits...")
 
     folds = create_k_folds(all_files, all_labels, n_folds=n_folds, seed=seed)
 
-    # 生成所有超参组合
+    # generate all hyperparameter combinations
     param_names = list(param_grid.keys())
     param_values = list(param_grid.values())
     all_combos = list(product(*param_values))
 
-    # 确保 d_model 能被 nhead 整除
+    # ensure d_model is divisible by nhead
     valid_combos = []
     for combo in all_combos:
         cfg = dict(zip(param_names, combo))
@@ -542,7 +519,7 @@ def grid_search(
         print(f"Note: Filtered out invalid d_model/nhead combinations")
         print(f"Valid combinations: {len(valid_combos)}")
 
-        # 用有效组合重建 param_grid（去重）
+        # Rebuild param_grid with valid combinations (deduplicate)
         filtered_grid: Dict[str, set] = {k: set() for k in param_names}
         for combo in valid_combos:
             for k, v in zip(param_names, combo):
@@ -560,9 +537,9 @@ def grid_search(
 
     all_results: List[Dict[str, Any]] = []
 
-    # 遍历所有组合
+    # iterate over all combinations
     for combo_idx, param_combo in enumerate(param_combinations):
-        # 合成 config（param_grid 覆盖 base_config）
+        # compose config (param_grid overrides base_config)
         config = base_config.copy()
         for name, value in zip(param_names, param_combo):
             config[name] = value
@@ -600,7 +577,7 @@ def grid_search(
 
         elapsed_time = time.time() - start_time
 
-        # 统计各 fold 的均值和方差
+        # calculate mean and std for each fold
         avg_final_val_loss = np.mean([r['final_val_loss'] for r in fold_results])
         avg_final_val_acc = np.mean([r['final_val_acc'] for r in fold_results])
         avg_best_val_loss = np.mean([r['best_val_loss'] for r in fold_results])
@@ -630,7 +607,7 @@ def grid_search(
             print(f"  Best  Val Acc: {avg_best_val_acc:.4f} ± {std_best_val_acc:.4f}")
             print(f"  Time: {elapsed_time:.1f}s")
 
-    # 找到最优配置（按 avg_best_val_acc 最大）
+    # find the best configuration (max avg_best_val_acc)
     best_result = max(all_results, key=lambda x: x['avg_best_val_acc'])
     best_config = best_result['config']
 
@@ -645,7 +622,7 @@ def grid_search(
             if k in param_names:
                 print(f"  {k}: {v}")
 
-    # 保存结果到 json
+    # save results to json
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     results_file = output_path / f"grid_search_{timestamp}.json"
 
@@ -681,16 +658,12 @@ def grid_search(
 
     return best_config, all_results
 
-
-# ------------------------------
-# CLI 入口：阶段式搜索版本 + SupCon
-# ------------------------------
 def main():
     parser = argparse.ArgumentParser(
         description='Grid Search (manual backprop Transformer + SupCon) with K-Fold CV'
     )
 
-    # 数据相关
+    # Data related
     parser.add_argument('--data_dir', type=str, default='../../digits_3d/training_data',
                         help='Path to training data')
     parser.add_argument('--n_folds', type=int, default=5,
@@ -698,13 +671,13 @@ def main():
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed')
 
-    # 输出
+    # Output
     parser.add_argument('--output_dir', type=str, default='grid_search_results',
                         help='Directory to save grid search results')
     parser.add_argument('--quiet', action='store_true',
                         help='Reduce output verbosity')
 
-    # 固定基本训练参数（和训练脚本一致）
+    # Fixed basic training parameters
     parser.add_argument('--epochs', type=int, default=50,
                         help='Number of epochs per fold')
     parser.add_argument('--batch_size', type=int, default=16,
@@ -721,7 +694,7 @@ def main():
     parser.add_argument('--mlp_ratio', type=float, default=None,
                         help='MLP ratio (None = default in model)')
 
-    # optimizer / scheduler 选项（这里只是 base_config，真正搜索范围在 param_grid 里）
+    # optimizer / scheduler options
     parser.add_argument('--optimizer', type=str, default='adamw',
                         choices=['sgd', 'adamw'],
                         help='Default optimizer type (if not overridden by grid)')
@@ -738,7 +711,7 @@ def main():
                         choices=['sinusoidal', 'learnable', 'conditional'],
                         help='Positional encoding type')
 
-    # SupCon 相关参数（用于 grid search）
+    # SupCon options
     parser.add_argument('--supcon_weight', type=float, default=0.0,
                         help='Weight for SupCon loss (0=disable SupCon)')
     parser.add_argument('--temperature', type=float, default=0.07,
@@ -748,12 +721,12 @@ def main():
     parser.add_argument('--projection_hidden_dim', type=int, default=256,
                         help='Projection head hidden dimension for SupCon')
 
-    # Grid search 模式
+    # Grid search mode
     parser.add_argument('--search_mode', type=str, default='quick',
                         choices=['quick', 'standard', 'extensive', 'custom'],
                         help='Predefined search mode')
 
-    # Custom grid search 参数 (仅在 --search_mode custom/standard/extensive 时用)
+    # Custom grid search parameters
     parser.add_argument('--lr_values', type=float, nargs='+',
                         help='Learning rates to search')
     parser.add_argument('--d_model_values', type=int, nargs='+',
@@ -767,25 +740,25 @@ def main():
     parser.add_argument('--mlp_ratio_values', type=float, nargs='+',
                         help='MLP ratios to search')
 
-    # SupCon 超参搜索
+    # SupCon hyperparameter search
     parser.add_argument('--supcon_weight_values', type=float, nargs='+',
                         help='SupCon weights to search (include 0.0 to disable)')
     parser.add_argument('--temperature_values', type=float, nargs='+',
                         help='SupCon temperatures to search')
 
-    # augmentation / movement_features 的 CLI 默认值（可配合 custom_values ）
+    # augmentation / movement_features 
     parser.add_argument('--augmentation', type=str, default=None,
                         help='Default augmentation mode (used if no augmentation_values provided)')
     parser.add_argument('--movement_features', type=str, default=None,
                         help='Default movement_features mode (used if no movement_features_values provided)')
 
-    # 新增：augmentation / movement_features 的搜索值（custom 模式使用）
+    # augmentation / movement_features 
     parser.add_argument('--augmentation_values', type=str, nargs='+',
                         help='Augmentation options to search (e.g. light medium strong none)')
     parser.add_argument('--movement_features_values', type=str, nargs='+',
                         help='Movement feature modes to search (e.g. concat replace all none)')
 
-    # 消融控制：是否使用resample
+    # whether to use resample
     parser.add_argument('--use_resample', action='store_true',
                         help='Use resample (old behavior) instead of padding/truncation')
     parser.add_argument('--use_resample_values', type=int, nargs='+',
@@ -793,11 +766,11 @@ def main():
 
     args = parser.parse_args()
 
-    # 设置随机种子
+    # Set random seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    # base_config：不在 grid 里的东西用这里的值
+    # base_config
     base_config: Dict[str, Any] = {
         'seq_len': args.seq_len,
         'batch_size': args.batch_size,
@@ -819,9 +792,9 @@ def main():
         'projection_hidden_dim': args.projection_hidden_dim,
     }
 
-    # 定义要搜索的超参数空间
+    # Define the hyperparameter search space
     if args.search_mode == 'quick':
-        # quick 模式用作“全集”，阶段式搜索时按组拆开
+        # quick mode
         quick_grid: Dict[str, List[Any]] = {
             'lr': [1e-3],
             'd_model': [64],
@@ -835,16 +808,14 @@ def main():
             'mlp_ratio': [None],
             'augmentation': ['light'],
             'movement_features': ['concat'],
-            # 消融实验：对比 padding/truncation vs resample
             'use_resample': [False, True],
-            # SupCon: 0.0 表示关闭；>0 表示启用 SupCon
             'supcon_weight': [0.0, 0.5],
             'temperature': [0.05, 0.07],
             'projection_dim': [32],
             'projection_hidden_dim': [32],
         }
-        param_grid = None  # 只是为了后面类型一致，不会用到
-    else:  # custom / standard / extensive（这里统一走 custom 的逻辑）
+        param_grid = None
+    else:
         param_grid: Dict[str, List[Any]] = {}
 
         param_grid['lr'] = args.lr_values if args.lr_values else [1e-3, 5e-4, 1e-4]
@@ -854,7 +825,7 @@ def main():
         param_grid['nhead'] = args.nhead_values if args.nhead_values else [4, 8]
         param_grid['mlp_ratio'] = args.mlp_ratio_values if args.mlp_ratio_values else [None, 2.0, 4.0]
 
-        # SupCon 超参
+        # SupCon
         if args.supcon_weight_values:
             param_grid['supcon_weight'] = args.supcon_weight_values
         else:
@@ -865,15 +836,14 @@ def main():
         else:
             param_grid['temperature'] = [args.temperature]
 
-        # projection_dim / hidden_dim 默认不大范围搜索
+        # projection_dim / hidden_dim
         param_grid['projection_dim'] = [args.projection_dim]
         param_grid['projection_hidden_dim'] = [args.projection_hidden_dim]
 
-        # 处理 augmentation grid（支持命令行传多值）
+        # augmentation
         if args.augmentation_values:
             aug_grid_raw = args.augmentation_values
         else:
-            # 如果没显式给，就只用当前 CLI 设置的 augmentation
             aug_grid_raw = [args.augmentation]
 
         aug_grid: List[Any] = []
@@ -884,7 +854,7 @@ def main():
                 aug_grid.append(a)
         param_grid['augmentation'] = aug_grid
 
-        # 处理 movement_features grid
+        # movement_features
         if args.movement_features_values:
             mf_grid_raw = args.movement_features_values
         else:
@@ -898,21 +868,19 @@ def main():
                 mf_grid.append(m)
         param_grid['movement_features'] = mf_grid
 
-        # 处理 use_resample grid（消融实验）
+        # use_resample grid
         if args.use_resample_values:
-            # 将 int 转换为 bool
+            # convert int to bool
             param_grid['use_resample'] = [bool(v) for v in args.use_resample_values]
         else:
-            # 默认使用当前 CLI 设置
             param_grid['use_resample'] = [args.use_resample]
 
-        # 其它保持默认或少量搜索
         param_grid['weight_decay'] = [args.weight_decay]
         param_grid['optimizer'] = ['adamw', 'sgd']
         param_grid['scheduler'] = ['warmup_cosine', 'cosine', 'none']
         param_grid['pos_encoding'] = ['sinusoidal', 'learnable', 'conditional']
 
-    # 打印基本信息
+    # logging
     print(f"\n{'='*80}")
     print(f"Grid Search with {args.n_folds}-Fold Cross Validation")
     print(f"{'='*80}")
@@ -923,20 +891,8 @@ def main():
     print(f"Random seed: {args.seed}")
     print()
 
-    # --------------------------
-    # quick 模式：多阶段（stage-wise）搜索
-    # --------------------------
     if args.search_mode == 'quick':
-        # 分阶段的超参数组：
-        # Stage 1: 结构相关（模型容量）
-        # Stage 2: 数据表示 & SupCon
-        # Stage 3: 优化相关（lr / weight_decay / scheduler / optimizer）
-        # stage_groups: List[List[str]] = [
-        #     ['d_model', 'nhead', 'num_layers', 'dropout'],
-        #     ['augmentation', 'movement_features', 'mlp_ratio', 'pos_encoding',
-        #      'supcon_weight', 'temperature', 'projection_dim', 'projection_hidden_dim'],
-        #     ['lr', 'weight_decay', 'scheduler', 'optimizer'],
-        # ]
+
         stage_groups: List[List[str]] = [
             ['d_model', 'nhead', 'num_layers', 'dropout', 'augmentation', 'movement_features', 'use_resample', 'mlp_ratio', 'pos_encoding',
              'supcon_weight', 'temperature', 'projection_dim', 'projection_hidden_dim',
@@ -947,9 +903,6 @@ def main():
         all_results = None
 
         for stage_idx, stage_keys in enumerate(stage_groups, start=1):
-            # 构造当前阶段的 param_grid：
-            #   - 当前阶段的 key 用 quick_grid 中的全部候选值
-            #   - 其他 key 固定为“当前最优配置里的值”（如果还没有，就用 quick_grid 的第一个值）
             stage_param_grid: Dict[str, List[Any]] = {}
             for k, vals in quick_grid.items():
                 if k in stage_keys:
@@ -974,14 +927,10 @@ def main():
                 verbose=not args.quiet
             )
 
-            # 把这一阶段找到的最优配置合并进 overall
             best_config_overall.update(best_config_stage)
 
         best_config = best_config_overall
 
-    # --------------------------
-    # 其它模式：一次性 grid search
-    # --------------------------
     else:
         best_config, all_results = grid_search(
             data_dir=args.data_dir,

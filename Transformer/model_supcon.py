@@ -1,10 +1,3 @@
-"""
-Transformer model with SupCon support
-
-This model can output both embeddings (for contrastive learning)
-and logits (for classification).
-"""
-
 import numpy as np
 from modules import (
     Parameter, Linear, LayerNorm, GELU, SiLU,
@@ -16,9 +9,7 @@ from model import MLP, SwiGLU, TransformerEncoderLayer
 
 class ProjectionHead:
     """
-    Projection head for contrastive learning
-
-    Maps encoder output to a lower-dimensional space where
+    Projection head for contrastive learning. Maps encoder output to a lower-dimensional space where
     contrastive loss is computed.
 
     Architecture: Linear -> ReLU -> Linear
@@ -87,10 +78,6 @@ class TransformerSupCon:
         1. Encoder: Transformer encoder (shared)
         2. Projection Head: For contrastive learning
         3. Classification Head: For supervised classification
-
-    Training can be done in two modes:
-        - Joint: Train both losses simultaneously
-        - Two-stage: First train with SupCon, then fine-tune classifier
     """
 
     def __init__(self, input_dim: int = 3, d_model: int = 128, nhead: int = 4,
@@ -225,11 +212,11 @@ class TransformerSupCon:
         Backward pass
 
         Args:
-            grad_embeddings: (batch, projection_dim) - gradient from contrastive loss
-            grad_logits: (batch, num_classes) - gradient from classification loss
+            grad_embeddings: gradient from contrastive loss
+            grad_logits: gradient from classification loss
 
         Returns:
-            grad_input: (batch, seq_len, input_dim)
+            grad_input: gradient w.r.t. input x
         """
         features = self.cache['features']
         after_pos = self.cache['after_pos']

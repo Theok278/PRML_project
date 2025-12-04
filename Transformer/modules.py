@@ -119,11 +119,7 @@ class LearnablePositionalEncoding:
 
 
 class ConditionalPositionalEncoding:
-    """Conditional Positional Encoding (CPE) - position-aware convolution
-
-    Instead of adding fixed/learned positional encodings, CPE uses depthwise
-    convolutions to implicitly encode position information in a data-dependent way.
-    """
+    """Conditional Positional Encoding (CPE) - position-aware convolution"""
 
     def __init__(self, d_model: int, kernel_size: int = 3, dropout: float = 0.0):
         self.d_model = d_model
@@ -166,9 +162,6 @@ class ConditionalPositionalEncoding:
             # Extract local window: (batch, kernel_size, d_model)
             window = padded[:, i:i+self.kernel_size, :]
 
-            # Depthwise conv: for each feature dim, convolve with corresponding kernel
-            # window: (B, K, D), conv_weight: (D, K)
-            # result: (B, D)
             conv_out = np.sum(window * self.conv_weight.data.T[np.newaxis, :, :], axis=1)
             output[:, i, :] = conv_out + self.conv_bias.data
 

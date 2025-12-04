@@ -14,15 +14,8 @@ from augmentation import (
 )
 from resample import resample_points
 
-
-# ============================================================================
-# 全局统计量（Global Statistics）
-#
-# 这些统计量是从整个数据集计算得到的，可用于单独训练（非N-fold）。
-# 在N-fold交叉验证时，每个fold会自动计算自己的统计量，不使用这些全局值。
-# ============================================================================
-
-# 全局统计量（12D特征，movement_features='all' + use_resample=True + seq_len=64）
+# global mean/std for different feature dimensions
+# 12D，movement_features='all' + use_resample=True + seq_len=64
 GLOBAL_MEAN_12 = np.array([
     -8.40791521e+00,  2.63744078e+02, -3.63322639e+01,
     -6.91013829e-02, -1.96790448e+00,  1.58798460e-01,
@@ -37,28 +30,18 @@ GLOBAL_STD_12 = np.array([
     2.89165406e-01,  2.95448709e-01,  2.49097978e+02
 ], dtype=np.float32)
 
-# 其他维度的全局统计量（从GLOBAL_MEAN_12/STD_12截断得到）
-GLOBAL_MEAN_3 = GLOBAL_MEAN_12[:3]   # movement_features='none': x, y, z
+# other dimensions derived from the 12D stats
+# movement_features='none': x, y, z
+GLOBAL_MEAN_3 = GLOBAL_MEAN_12[:3]   
 GLOBAL_STD_3 = GLOBAL_STD_12[:3]
 
-GLOBAL_MEAN_6 = GLOBAL_MEAN_12[:6]   # movement_features='cat_move': x, y, z, dx, dy, dz
+# movement_features='cat_move': x, y, z, dx, dy, dz
+GLOBAL_MEAN_6 = GLOBAL_MEAN_12[:6]   
 GLOBAL_STD_6 = GLOBAL_STD_12[:6]
 
-GLOBAL_MEAN_9 = GLOBAL_MEAN_12[:9]   # movement_features='cat_dir': x, y, z, dx, dy, dz, dir_x, dir_y, dir_z
+# movement_features='cat_dir': x, y, z, dx, dy, dz, dir_x, dir_y, dir_z
+GLOBAL_MEAN_9 = GLOBAL_MEAN_12[:9]   
 GLOBAL_STD_9 = GLOBAL_STD_12[:9]
-
-
-def pretreat_points(points: np.ndarray, normalization: bool = True) -> np.ndarray:
-    """
-    目前不对原始 XYZ 做归一化，归一化在特征层面完成。
-    保留这个函数只是为了兼容，不再建议使用。
-    """
-    return points
-
-
-# Note: resample_points() is now imported from resample.py
-# It supports both 'temporal' and 'arclength' methods
-
 
 class DigitsStrokeDataset(Dataset):
     """Dataset for 3D digit strokes stored as CSV files."""
@@ -75,11 +58,11 @@ class DigitsStrokeDataset(Dataset):
         use_resample: bool = False,  # If True, use resample; if False, use padding/truncation
         resample_method: str = 'arclength',  # 'temporal' or 'arclength' (only used if use_resample=True)
 
-        # ⭐ 从外部传入的特征 mean/std（N-fold CV的验证集会用到）
+        # Feature mean/std for normalization (can be passed from outside, e.g., for N-fold CV validation)
         feature_mean: Optional[np.ndarray] = None,
         feature_std: Optional[np.ndarray] = None,
 
-        # ⭐ 是否使用预定义的全局统计量（单独训练时用）
+        # Whether to use predefined global statistics (for standalone training)
         use_global_stats: bool = False,
     ):
         self.data_dir = data_dir
@@ -91,7 +74,7 @@ class DigitsStrokeDataset(Dataset):
         self.resample_method = resample_method
         self.use_global_stats = use_global_stats
 
-        # 保存（可能从 main 传进来的）mean/std
+        # Feature mean/std for normalization
         self.feature_mean = None if feature_mean is None else np.asarray(feature_mean, dtype=np.float32)
         self.feature_std = None if feature_std is None else np.asarray(feature_std, dtype=np.float32)
 
@@ -148,14 +131,10 @@ class DigitsStrokeDataset(Dataset):
         aug_str = f" (augmentation: {augmentation})" if augmentation and training else ""
         print(f"Loaded {len(self.files)} samples across {self.num_classes} classes{aug_str}")
 
-        # ⭐ 统计量处理逻辑：
-        # 只有在使用 movement_features 时才需要统计量
-        # 1. 如果外部传入了 feature_mean/std，使用外部值（N-fold CV场景）
-        # 2. 如果 use_global_stats=True，使用预定义的全局统计量（单独训练场景）
-        # 3. 否则，训练集自动计算统计量（默认行为）
+        # Compute feature mean/std if needed
         if movement_features is not None and self.normalization and (self.feature_mean is None or self.feature_std is None):
             if use_global_stats:
-                # 使用全局统计量（根据movement_features选择对应维度）
+                # Use predefined global statistics
                 if movement_features == 'all':
                     self.feature_mean = GLOBAL_MEAN_12.copy()
                     self.feature_std = GLOBAL_STD_12.copy()
@@ -178,13 +157,13 @@ class DigitsStrokeDataset(Dataset):
                         f"Supported: 'none' (3D), 'cat_move' (6D), 'cat_dir' (9D), 'all' (12D)"
                     )
             elif self.training:
-                # 训练集自动计算统计量
+                # Calculate from training set
                 print("[DigitsStrokeDataset] Computing dataset-level mean/std over features...")
                 self.feature_mean, self.feature_std = self._compute_feature_mean_std()
                 print("[DigitsStrokeDataset] Done. mean =", self.feature_mean)
                 print("[DigitsStrokeDataset] Done. std  =", self.feature_std)
             else:
-                # 验证/测试集但没有提供统计量也没有使用全局统计量
+                # Validation/test set without provided statistics and not using global statistics
                 if movement_features is not None:
                     raise RuntimeError(
                         "For validation/test set with movement_features, you must either:\n"
@@ -202,12 +181,7 @@ class DigitsStrokeDataset(Dataset):
 
     def _compute_feature_mean_std(self) -> Tuple[np.ndarray, np.ndarray]:
         """
-        仅在 training=True 且 normalization=True 且没有外部传入 mean/std 时调用。
-        对整个数据集：
-          - 读取 CSV (N,3)
-          - 根据 use_resample 决定是否重采样
-          - 提取 movement_extractor 特征（3D/6D/9D/12D）
-        然后用 Welford 算法计算全局 mean/std。
+        Compute mean and std of movement features over the entire dataset.
         """
         if self.movement_extractor is None:
             raise RuntimeError(
@@ -225,13 +199,11 @@ class DigitsStrokeDataset(Dataset):
             if pts.shape[0] < 2:
                 continue
 
-            # 与 __getitem__ 中保持一致的 resample 逻辑
             if self.use_resample:
                 pts_proc = resample_points(pts, self.seq_len, method=self.resample_method)
             else:
-                pts_proc = pts  # 不重采样，直接用原始点序列
+                pts_proc = pts
 
-            # 不做增强，这里只统计“干净数据”的分布
             feats = self.movement_extractor(pts_proc)  # (T, feat_dim)
 
             if mean is None:
@@ -273,21 +245,18 @@ class DigitsStrokeDataset(Dataset):
         if self.movement_extractor is not None:
             pts = self.movement_extractor(pts)  # (T, feat_dim)
 
-        # 3.5 归一化：使用训练集统计得到的 feature_mean/std
-        # 只要提取了特征（movement_extractor不为None），就需要归一化
-        # 注意：movement_features='none' 也会提取x,y,z特征，也需要归一化
+        # 4. Normalize if needed
         if self.movement_extractor is not None and self.normalization:
             if self.feature_mean is None or self.feature_std is None:
                 raise RuntimeError("feature_mean/std is None, but normalization=True. "
                                    "For test/val set, please pass trainset's mean/std into the constructor.")
             pts = (pts - self.feature_mean) / self.feature_std
 
-        # 4. Pad or truncate to seq_len (if not using resample)
+        # 5. Pad or truncate to seq_len (if not using resample)
         if self.use_resample:
             # Already resampled to seq_len, all positions are valid
             T = pts.shape[0]
             if T != self.seq_len:
-                # 理论上不该发生，但稳一点
                 if T > self.seq_len:
                     pts = pts[:self.seq_len]
                     mask = np.ones(self.seq_len, dtype=bool)

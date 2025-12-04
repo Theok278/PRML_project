@@ -3,7 +3,7 @@ from modules import Softmax
 
 
 class CrossEntropyLoss:
-    """Cross-entropy loss with manual backprop"""
+    """Cross-entropy loss"""
 
     def __init__(self):
         self.softmax = Softmax(dim=-1)

@@ -1,31 +1,11 @@
-"""
-Supervised Contrastive Loss (SupCon) with manual backpropagation
-
-Based on "Supervised Contrastive Learning" (Khosla et al., 2020)
-https://arxiv.org/abs/2004.11362
-
-Reference implementation:
-https://github.com/google-research/google-research/tree/master/supcon
-"""
-
 import numpy as np
-
 
 class SupConLoss:
     """
-    Supervised Contrastive Learning Loss
-
-    For each anchor, pull positive samples (same class) closer
-    and push negative samples (different class) further away.
+    Supervised Contrastive Learning Loss. For each anchor, pull positive samples (same class) closer and push negative samples (different class) further away.
 
     Loss formula:
         L = -1/|P(i)| * sum_{p in P(i)} log[ exp(z_i · z_p / τ) / sum_{a in A(i)} exp(z_i · z_a / τ) ]
-
-    where:
-        - P(i): set of indices of positives for anchor i (same class, excluding i)
-        - A(i): set of all indices excluding i
-        - τ: temperature parameter
-        - z: L2-normalized embeddings
     """
 
     def __init__(self, temperature: float = 0.07, base_temperature: float = 0.07):
@@ -179,7 +159,6 @@ class SupConLoss:
         grad_features = (grad_features_normalized - dot_product * features_normalized) / (features_norm + 1e-8)
 
         return grad_features
-
 
 class CombinedLoss:
     """

@@ -7,9 +7,7 @@ import numpy as np
 
 def resample_points_temporal(points: np.ndarray, seq_len: int) -> np.ndarray:
     """
-    Temporal (equal-time) resampling: linear interpolation in time domain
-
-    Treats the sequence as evenly spaced in time and linearly interpolates
+    Temporal (equal-time) resampling: linear interpolation in time domain. Treats the sequence as evenly spaced in time and linearly interpolates
     to a target number of points.
 
     Args:
@@ -37,11 +35,7 @@ def resample_points_temporal(points: np.ndarray, seq_len: int) -> np.ndarray:
 
 def resample_points_arclength(points: np.ndarray, seq_len: int) -> np.ndarray:
     """
-    Arc-length (equal-distance) resampling: interpolation along spatial trajectory
-
-    Resamp
-
-les points at equal distances along the spatial path, preserving
+    Arc-length (equal-distance) resampling: interpolation along spatial trajectory. Resamples points at equal distances along the spatial path, preserving
     geometric properties better than temporal resampling.
 
     Args:

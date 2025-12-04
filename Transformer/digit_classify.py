@@ -2,7 +2,7 @@ import numpy as np
 from pathlib import Path
 import json
 
-# fixed checkpoint path
+# Fixed checkpoint path
 ckpt_dir = Path(__file__).parent / "checkpoint"
 npz_files = list(ckpt_dir.glob("*.npz"))
 
@@ -13,10 +13,14 @@ elif len(npz_files) > 1:
 else:
     CHECKPOINT_PATH = npz_files[0]
 
-# 全局分类器实例（缓存模型，保证只加载一次）
+# Global classifier instance, lazy loaded
 _classifier = None
 
 def load_parameters_strict(model, checkpoint, strict=True):
+    """ 
+    load model parameters from checkpoint with strict checking.
+    Because we don't have parameter names, we match parameters by order.
+    """
     model_params = list(model.parameters())
     total = len(model_params)
 
@@ -35,7 +39,7 @@ def load_parameters_strict(model, checkpoint, strict=True):
 
         ckpt_param = checkpoint[key]
 
-        # shape 不一致
+        # shape mismatch
         if ckpt_param.shape != param.data.shape:
             mismatch += 1
             if strict:
@@ -60,7 +64,8 @@ def load_parameters_strict(model, checkpoint, strict=True):
 
 def load_model_from_checkpoint(checkpoint_path: Path):
     """
-    从 checkpoint 自动加载模型及配置（完全依赖 args）
+    Load Transformer model from checkpoint .npz file.
+    Automatically reads model config from saved 'args' in checkpoint.
     """
     print(f"Loading checkpoint from: {checkpoint_path}")
     checkpoint = np.load(checkpoint_path, allow_pickle=True)
@@ -71,12 +76,12 @@ def load_model_from_checkpoint(checkpoint_path: Path):
             "Please ensure the checkpoint was saved with training arguments."
         )
 
-    # 从 args 中读取配置（包含 seq_len / movement_features）
+    # Load config from args (including seq_len / movement_features)
     args = json.loads(str(checkpoint['args']))
 
     print("  Loaded config from checkpoint")
 
-    # 基本 Transformer 配置
+    # Basic Transformer config
     d_model = args.get('d_model', 128)
     nhead = args.get('nhead', 8)
     num_layers = args.get('num_layers', 4)
@@ -84,13 +89,13 @@ def load_model_from_checkpoint(checkpoint_path: Path):
     mlp_ratio = args.get('mlp_ratio', None)
     pos_encoding = args.get('pos_encoding', 'sinusoidal')
 
-    # 这些项完全从 checkpoint 里读
+    # These items are fully read from the checkpoint
     seq_len = args.get('seq_len', 128)
     movement_features = args.get('movement_features', None)
     use_resample = args.get('use_resample', False)
     resample_method = args.get('resample_method', 'arclength')
 
-    # 判断是否为 SupCon 模型
+    # Determine if this is a SupCon model
     is_supcon = 'supcon_weight' in args or 'projection_dim' in args
     supcon_weight = args.get('supcon_weight', 0.5)
     temperature = args.get('temperature', 0.07)
@@ -114,7 +119,7 @@ def load_model_from_checkpoint(checkpoint_path: Path):
         print(f"  temperature: {temperature}")
         print(f"  projection_dim: {projection_dim}")
 
-    # 构建模型
+    # Build model
     try:
         from augmentation import get_input_dim
         input_dim = get_input_dim(movement_features)
@@ -156,7 +161,7 @@ def load_model_from_checkpoint(checkpoint_path: Path):
             "Make sure model.py / model_supcon.py are in the same directory"
         )
 
-    # 加载权重
+    # Load model parameters from checkpoint with strict checking
     loaded_count = load_parameters_strict(model, checkpoint, strict=True)
     print(f"Model parameters loaded: {loaded_count}")
     model.eval()
@@ -177,9 +182,11 @@ def load_model_from_checkpoint(checkpoint_path: Path):
 
 class DigitClassifier:
     """
-    包一层，负责：
-    - 调用 load_model_from_checkpoint 从固定路径加载模型
-    - 保存 seq_len / movement_features 用于预处理
+    DigitClassifier class for classifying single 3D digit trajectories.
+
+    Usage:
+        classifier = DigitClassifier()
+        class_label = classifier.classify(testdata)
     """
 
     def __init__(self):
@@ -203,7 +210,7 @@ class DigitClassifier:
         from augmentation import MovementFeatureExtractor, get_input_dim
         import numpy as np
 
-        # 输入数据验证和转换
+        # Input data validation and conversion
         if isinstance(testdata, (str, Path)):
             testdata = np.loadtxt(testdata, delimiter=",")
         elif isinstance(testdata, (list, tuple)):
@@ -232,11 +239,11 @@ class DigitClassifier:
 
         pts = testdata.astype(np.float32)
 
-        # 1. 重采样（如果训练时使用了resample）⭐ 关键：必须与训练时一致
+        # 1. Resample
         if self.use_resample:
             pts = resample_points(pts, self.seq_len)
 
-        # 2. 提取运动特征（使用与训练时一致的 MovementFeatureExtractor）
+        # 2. Extract movement features
         if self.movement_features is not None:
             if self.movement_features not in ['none', 'cat_move', 'cat_dir', 'all']:
                 raise ValueError(
@@ -246,10 +253,10 @@ class DigitClassifier:
             feature_extractor = MovementFeatureExtractor(mode=self.movement_features)
             features = feature_extractor(pts)  # (N, feat_dim)
         else:
-            # 没有特征提取，直接使用原始xyz
+            # No feature extraction, use raw xyz directly
             features = pts  # (N, 3)
 
-        # 3. 归一化（使用全局统计量）
+        # 3. Normalize (using global statistics)
         if self.movement_features == 'all':
             features = (features - GLOBAL_MEAN_12) / GLOBAL_STD_12
         elif self.movement_features == 'cat_dir':
@@ -258,14 +265,17 @@ class DigitClassifier:
             features = (features - GLOBAL_MEAN_6) / GLOBAL_STD_6
         elif self.movement_features == 'none':
             features = (features - GLOBAL_MEAN_3) / GLOBAL_STD_3
-        # else: 如果movement_features=None，不进行归一化
+        else: 
+            raise ValueError(
+                f"Unknown movement_features: {self.movement_features}. "
+                f"Must be one of: 'none', 'cat_move', 'cat_dir', 'all'"
+            )
 
-        # 4. Padding或截断到seq_len（如果没有使用resample）
+        # 4. Padding or truncation to seq_len (if not using resample)
         if self.use_resample:
-            # 已经重采样到seq_len，所有位置都有效
+            # Already resampled to seq_len, all positions are valid
             T = features.shape[0]
             if T != self.seq_len:
-                # 理论上不该发生，但为了稳定性
                 if T > self.seq_len:
                     features = features[:self.seq_len]
                     mask = np.ones(self.seq_len, dtype=bool)
@@ -277,10 +287,10 @@ class DigitClassifier:
             else:
                 mask = np.ones(self.seq_len, dtype=bool)
         else:
-            # 使用padding/truncation
+            # Use padding/truncation
             actual_len = features.shape[0]
             if actual_len > self.seq_len:
-                # 截断
+                # Truncation
                 features = features[:self.seq_len]
                 mask = np.ones(self.seq_len, dtype=bool)
             elif actual_len < self.seq_len:
@@ -292,13 +302,17 @@ class DigitClassifier:
             else:
                 mask = np.ones(self.seq_len, dtype=bool)
 
-        # 5. 转换为batch format
+        # 5. Convert to batch format
         batch_data = features[np.newaxis, ...]  # (1, seq_len, feat_dim)
         batch_mask = mask[np.newaxis, ...]      # (1, seq_len)
 
         return batch_data, batch_mask
 
     def classify(self, testdata) -> int:
+        """
+        Classify a single 3D digit trajectory.
+        Returns the predicted class label (0-9).
+        """
         batch_data, batch_mask = self.preprocess(testdata)
 
         if self.model_type == "supcon":
@@ -311,6 +325,10 @@ class DigitClassifier:
         return predicted_class
 
     def classify_with_confidence(self, testdata):
+        """
+        Classify a single 3D digit trajectory.
+        Returns the predicted class label (0-9), confidence score, and full probability distribution.
+        """
         batch_data, batch_mask = self.preprocess(testdata)
 
         if self.model_type == "supcon":
@@ -327,14 +345,13 @@ class DigitClassifier:
 
         return predicted_class, confidence, probabilities
 
-
 def digit_classify(testdata):
     """
-    对单条 3D 轨迹进行分类：
+    Classify a single 3D digit trajectory:
         C = digit_classify(testdata)
 
-    其它超参数（seq_len / movement_features / 模型结构等）
-    全部从 CHECKPOINT_PATH 对应权重里的 args 自动读取。
+    Other hyperparameters (seq_len / movement_features / model structure, etc.)
+    are all automatically read from the args in the weights corresponding to CHECKPOINT_PATH.
     """
     global _classifier
     if _classifier is None:
@@ -344,7 +361,7 @@ def digit_classify(testdata):
 
 def reset_classifier():
     """
-    手动清空全局模型缓存（比如想强制重新加载权重时用）
+    Manually clear the global model cache (e.g., to force reloading weights)
     """
     global _classifier
     _classifier = None

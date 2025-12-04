@@ -6,9 +6,9 @@ import time
 
 def find_stroke_files():
     """
-    在当前目录下查找所有 stroke_*_*.csv 文件，
-    并解析出其中的数字标签（文件名格式：stroke_<label>_<id>.csv）
-    返回列表：[(path, label), ...]
+    find all stroke_*_*.csv files in the current directory,
+    and parse out the digit labels from filenames (format: stroke_<label>_<id>.csv)
+    return a list: [(path, label), ...]
     """
     stroke_files = []
 
@@ -16,7 +16,7 @@ def find_stroke_files():
         name = path.name  # e.g. "stroke_0_0001.csv"
         parts = name.split("_")
         if len(parts) < 3:
-            # 不是期望格式，跳过
+            # Not the expected format, skip
             continue
 
         # parts[0] = "stroke"
@@ -25,7 +25,7 @@ def find_stroke_files():
         try:
             label = int(parts[1])
         except ValueError:
-            # label 解析失败，跳过
+            # Failed to parse label, skip
             continue
 
         stroke_files.append((path, label))
@@ -35,10 +35,11 @@ def find_stroke_files():
 
 def evaluate_digit_classifier(num_classes: int = 10, verbose: bool = True):
     """
-    对当前目录下所有 stroke_*_*.csv 进行评测，计算准确率和混淆矩阵。
+    Evaluate all stroke_*_*.csv files in the current directory,
+    computing accuracy and confusion matrix.
     """
     start_time = time.time()
-    # 确保每次运行从干净的状态开始（可选）
+    # Ensure a clean state at the start of each run (optional)
     reset_classifier()
 
     samples = find_stroke_files()
@@ -48,17 +49,17 @@ def evaluate_digit_classifier(num_classes: int = 10, verbose: bool = True):
 
     print(f"Found {len(samples)} stroke files.")
 
-    # 混淆矩阵：行是真实标签，列是预测标签
+    # Confusion matrix: rows = true labels, columns = predicted labels
     confusion = np.zeros((num_classes, num_classes), dtype=int)
 
     correct = 0
     total = 0
 
     for idx, (path, true_label) in enumerate(samples, start=1):
-        # 调用你的 digit_classify（它会自动加载 checkpoint 并缓存模型）
+        # Call your digit_classify (it will automatically load checkpoint and cache model)
         pred = digit_classify(str(path))
 
-        # 统计混淆矩阵（防止越界）
+        # Update confusion matrix (prevent out-of-range)
         if 0 <= true_label < num_classes and 0 <= pred < num_classes:
             confusion[true_label, pred] += 1
         else:
@@ -84,10 +85,10 @@ def evaluate_digit_classifier(num_classes: int = 10, verbose: bool = True):
     print(f"Correct       : {correct}")
     print(f"Accuracy      : {accuracy:.4f}")
 
-    # 打印混淆矩阵
+    # Print confusion matrix
     print("\nConfusion matrix (rows = true labels, cols = predicted labels):\n")
 
-    # 打印表头
+    # Print header
     header = "      " + " ".join(f"{c:4d}" for c in range(num_classes))
     print(header)
     print("     " + "-" * (5 * num_classes))
