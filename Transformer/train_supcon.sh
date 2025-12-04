@@ -7,11 +7,12 @@ echo "=========================================="
 python train_supcon.py \
     --data_dir ../../digits_3d/training_data \
     --augmentation light \
-    --movement_features none \
+    --movement_features all \
+    --resample_method arclength \
     --optimizer adamw \
     --scheduler warmup_cosine \
     --pos_encoding sinusoidal \
-    --epochs 20 \
+    --epochs 8 \
     --batch_size 16 \
     --lr 0.001 \
     --weight_decay 0.05 \
@@ -21,12 +22,13 @@ python train_supcon.py \
     --nhead 4 \
     --num_layers 2 \
     --dropout 0.1 \
-    --seq_len 128 \
-    --val_split 0.2 \
+    --seq_len 64 \
+    --val_split 0. \
     --supcon_weight 0.5 \
     --temperature 0.05 \
     --projection_dim 32 \
     --projection_hidden_dim 32 \
+    --use_resample \
     --seed 42
 
 if [ $? -eq 0 ]; then

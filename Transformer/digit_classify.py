@@ -347,11 +347,25 @@ class DigitClassifier:
 
 def digit_classify(testdata):
     """
-    Classify a single 3D digit trajectory:
+    digit_classify(testdata)
+    ------------------------
+    Purpose:
+        Classify a single 3D hand-drawn digit trajectory into one of the
+        digit classes {0, 1, ..., 9}. This function is the main entry
+        point required by the project specification.
+
+    Usage:
         C = digit_classify(testdata)
 
-    Other hyperparameters (seq_len / movement_features / model structure, etc.)
-    are all automatically read from the args in the weights corresponding to CHECKPOINT_PATH.
+    Parameters:
+        testdata : numpy.ndarray or list-like
+            A 2D array of shape (N, 3) representing a single digit
+            trajectory, where each row is a 3-D point (x, y, z) sampled
+            over time.
+
+    Returns:
+        C : int
+            The predicted digit label in {0, 1, ..., 9}.
     """
     global _classifier
     if _classifier is None:

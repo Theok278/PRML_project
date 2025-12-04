@@ -105,7 +105,7 @@ class DigitsStrokeDataset(Dataset):
         else:
             self.augment = None
 
-        # Setup movement feature extractor (for both training and testing!)
+        # Setup movement feature extractor
         if movement_features is not None:
             if movement_features not in ['none', 'cat_move', 'cat_dir', 'all']:
                 raise ValueError(

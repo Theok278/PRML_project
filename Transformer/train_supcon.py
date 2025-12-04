@@ -485,15 +485,10 @@ def main():
     val_size = int(len(full_dataset) * args.val_split)
     train_size = len(full_dataset) - val_size
 
-    # Get train/val file lists
     indices = torch.randperm(len(full_dataset)).tolist()
     train_indices = indices[:train_size]
-    val_indices = indices[train_size:]
-
     train_files = [full_dataset.files[i] for i in train_indices]
-    val_files = [full_dataset.files[i] for i in val_indices]
 
-    # Create separate datasets with/without augmentation
     train_dataset = DigitsStrokeDataset(
         args.data_dir,
         seq_len=args.seq_len,
@@ -505,32 +500,38 @@ def main():
         resample_method=args.resample_method,
         use_global_stats=args.use_global_stats
     )
-    val_dataset = DigitsStrokeDataset(
-        args.data_dir,
-        seq_len=args.seq_len,
-        file_list=val_files,
-        augmentation=None,
-        movement_features=movement_features,
-        training=False,
-        use_resample=args.use_resample,
-        resample_method=args.resample_method,
-        use_global_stats=args.use_global_stats,
-        feature_mean=train_dataset.feature_mean if not args.use_global_stats else None,
-        feature_std=train_dataset.feature_std if not args.use_global_stats else None
-    )
 
-    # create dataloaders
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size,
                               shuffle=True, num_workers=0)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size,
-                            shuffle=False, num_workers=0)
 
-    # convert to numpy arrays
     print("Converting data to numpy...")
     train_data, train_labels, train_masks = numpy_from_dataloader(train_loader)
-    val_data, val_labels, val_masks = numpy_from_dataloader(val_loader)
 
-    print(f"Train: {train_data.shape}, Val: {val_data.shape}")
+    if val_size > 0:
+        val_indices = indices[train_size:]
+        val_files = [full_dataset.files[i] for i in val_indices]
+
+        val_dataset = DigitsStrokeDataset(
+            args.data_dir,
+            seq_len=args.seq_len,
+            file_list=val_files,
+            augmentation=None,
+            movement_features=movement_features,
+            training=False,
+            use_resample=args.use_resample,
+            resample_method=args.resample_method,
+            use_global_stats=args.use_global_stats,
+            feature_mean=train_dataset.feature_mean if not args.use_global_stats else None,
+            feature_std=train_dataset.feature_std if not args.use_global_stats else None
+        )
+
+        val_loader = DataLoader(val_dataset, batch_size=args.batch_size,
+                                shuffle=False, num_workers=0)
+        val_data, val_labels, val_masks = numpy_from_dataloader(val_loader)
+        print(f"Train: {train_data.shape}, Val: {val_data.shape}")
+    else:
+        val_data, val_labels, val_masks = None, None, None
+        print(f"Train: {train_data.shape}, Val: None (val_split=0)")
 
     # Determine input dimension based on movement features
     from augmentation import get_input_dim
@@ -677,9 +678,12 @@ def main():
             )
 
         # validate
-        val_loss, val_acc = evaluate(
-            model, val_data, val_labels, val_masks, args.batch_size, is_supcon=use_supcon
-        )
+        if val_data is not None:
+            val_loss, val_acc = evaluate(
+                model, val_data, val_labels, val_masks, args.batch_size, is_supcon=use_supcon
+            )
+        else:
+            val_loss, val_acc = 0.0, 0.0
 
         epoch_time = time.time() - epoch_start
 
@@ -704,7 +708,7 @@ def main():
                   f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
 
         # save best model
-        if val_acc > best_val_acc:
+        if val_data is not None and val_acc > best_val_acc:
             best_val_acc = val_acc
             checkpoint = {
                 'epoch': epoch,
@@ -716,6 +720,16 @@ def main():
 
             np.savez(output_dir / 'best_checkpoint.npz', **checkpoint)
             print(f"  → Saved best model (val_acc: {val_acc:.4f})")
+        elif val_data is None:
+            checkpoint = {
+                'epoch': epoch,
+                'val_acc': train_acc,
+                'args': json.dumps(vars(args))
+            }
+            for i, p in enumerate(model.parameters()):
+                checkpoint[f'param_{i}'] = p.data.copy()
+
+            np.savez(output_dir / 'best_checkpoint.npz', **checkpoint)
 
     # save final model
     checkpoint = {

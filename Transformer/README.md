@@ -10,7 +10,6 @@ A Transformer-based deep learning model for classifying 3D air-written digits (0
 - `modules.py` - Building blocks (Multi-head Attention, LayerNorm, MLP, SwiGLU, etc.)
 
 ### Training & Optimization
-- `train_mian.py` - Main training script for standard Transformer
 - `train_supcon.py` - Training script for SupCon variant
 - `optimizer.py` - SGD and AdamW optimizers with manual implementation
 - `scheduler.py` - Learning rate schedulers (WarmupCosine, CosineAnnealing)
@@ -22,7 +21,6 @@ A Transformer-based deep learning model for classifying 3D air-written digits (0
 - `augmentation.py` - Data augmentation (rotation, scaling, jitter, time-warping) and movement feature extraction
 
 ### Hyperparameter Tuning
-- `grid_search_cv.py` - Grid search with cross-validation for standard model
 - `grid_search_supcon.py` - Grid search for SupCon model
 
 ### Inference & Evaluation
