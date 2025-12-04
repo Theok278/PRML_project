@@ -1,4 +1,4 @@
-# 3D Air Writing Digit Classification with Transformer with numpy
+# 3D Air Writing Digit Classification with Transformer using numpy
 
 A Transformer-based deep learning model for classifying 3D air-written digits (0-9) with manual backpropagation implementation.
 
