@@ -12,12 +12,12 @@ A Transformer-based deep learning model for classifying 3D air-written digits (0
 ### Training & Optimization
 - `train_supcon.py` - Training script for SupCon variant
 - `optimizer.py` - SGD and AdamW optimizers with manual implementation
-- `scheduler.py` - Learning rate schedulers (WarmupCosine, CosineAnnealing)
-- `loss.py` - Cross-entropy loss with manual backprop
+- `scheduler.py` - Learning rate schedulers
+- `loss.py` - Cross-entropy loss
 - `supcon_loss.py` - Supervised Contrastive Loss
 
 ### Data Processing
-- `dataset.py` - PyTorch Dataset for 3D stroke data with resampling & normalization
+- `dataset.py` - Dataset for 3D stroke data with resampling & normalization
 - `augmentation.py` - Data augmentation (rotation, scaling, jitter, time-warping) and movement feature extraction
 
 ### Hyperparameter Tuning
@@ -27,18 +27,23 @@ A Transformer-based deep learning model for classifying 3D air-written digits (0
 - `digit_classify.py` - Production inference API with automatic checkpoint loading
 - `test_digit_classify.py` - Evaluation script with confusion matrix
 
+## Dependencies
+
+- NumPy
+- PyTorch (for data loading only)
+- Pandas
+
+```bash
+pip install -r requirements.txt
+```
 ## Quick Start
 
 ### Training
 ```bash
-# Standard Transformer
-bash train_mian.sh
-
-# With Supervised Contrastive Learning
 bash train_supcon.sh
 ```
 
-### Inference
+### digit_classify Inference
 ```python
 from digit_classify import digit_classify
 
@@ -51,34 +56,6 @@ print(f"Predicted digit: {prediction}")
 ```bash
 python test_digit_classify.py
 ```
-
-## Key Features
-
-### Model Architecture
-- **Transformer Encoder** with:
-  - CLS token for global representation
-  - Sinusoidal/Learnable/Conditional positional encoding
-  - Multi-head self-attention
-  - SwiGLU feed-forward networks
-  - Pre-normalization and residual connections
-
-### Data Processing
-- **Resampling**: Fixed-length sequence (default 128 points)
-- **Normalization**: Zero-mean, unit-variance per sample
-- **Movement Features**: Optional velocity/acceleration features
-- **Augmentation**: Rotation, scaling, translation, jitter, time-warping
-
-### Training Techniques
-- AdamW optimizer with weight decay
-- Warmup + Cosine learning rate scheduling
-- Label smoothing
-- Supervised Contrastive Learning (optional)
-
-## Performance
-
-Current best model (detials in .sh file):
-- **Architecture**: d_model=64, nhead=4, num_layers=2 
-- **Training**: 20 epochs, AdamW optimizer, warmup_cosine scheduler
 
 ## Model Checkpoint
 
@@ -102,11 +79,31 @@ x2, y2, z2
 File naming convention: `stroke_<label>_<id>.csv`
 - Example: `stroke_3_0042.csv` (digit 3, sample 42)
 
-## Dependencies
+## Key Features
 
-- NumPy
-- PyTorch (for data loading only)
-- Pandas
+### Model Architecture
+- **Transformer Encoder** with:
+  - CLS token for global representation
+  - Sinusoidal/Learnable/Conditional positional encoding
+  - Multi-head self-attention
+  - SwiGLU feed-forward networks
+
+### Data Processing
+- **Augmentation**: Rotation, scaling, translation, jitter, time-warping
+- **Resampling**: Fixed-length sequence (default 64 points)
+- - **Movement Features**: Optional velocity/acceleration features
+- **Normalization**: Zero-mean, unit-variance per sample
+
+### Training Techniques
+- AdamW optimizer with weight decay
+- Warmup + Cosine learning rate scheduling
+- Supervised Contrastive Learning (optional)
+
+## Performance
+
+Current best model (detials in .sh file):
+- **Architecture**: d_model=64, nhead=4, num_layers=2 
+- **Training**: 20 epochs, AdamW optimizer, warmup_cosine scheduler
 
 ## Implementation Notes
 
