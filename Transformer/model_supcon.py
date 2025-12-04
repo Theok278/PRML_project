@@ -151,13 +151,14 @@ class TransformerSupCon:
         # Cache for backward
         self.cache = {}
 
-    def forward(self, x: np.ndarray, training: bool = True,
+    def forward(self, x: np.ndarray, mask: np.ndarray = None, training: bool = True,
                 return_embeddings: bool = True) -> tuple:
         """
         Forward pass
 
         Args:
             x: (batch, seq_len, input_dim)
+            mask: (batch, seq_len) boolean mask where True indicates valid positions
             training: Whether in training mode
             return_embeddings: If True, return embeddings for contrastive loss
 
@@ -182,13 +183,18 @@ class TransformerSupCon:
         cls_tokens = np.tile(self.cls_token.data, (batch_size, 1, 1))
         x = np.concatenate([cls_tokens, x], axis=1)
 
+        # Update mask to account for CLS token (CLS is always valid)
+        if mask is not None:
+            cls_mask = np.ones((batch_size, 1), dtype=mask.dtype)
+            mask = np.concatenate([cls_mask, mask], axis=1)  # (batch, seq_len+1)
+
         # Add positional encoding
         x = self.pos_encoder.forward(x)
         self.cache['after_pos'] = x
 
         # Transformer layers
         for layer in self.layers:
-            x = layer.forward(x)
+            x = layer.forward(x, mask=mask)
 
         # Extract CLS token output (this is our representation)
         cls_out = x[:, 0, :]  # (batch, d_model)

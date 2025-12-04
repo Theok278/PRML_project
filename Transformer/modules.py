@@ -512,10 +512,11 @@ class MultiHeadAttention:
         # cache for backward
         self.cache = {}
 
-    def forward(self, x: np.ndarray) -> np.ndarray:
+    def forward(self, x: np.ndarray, mask: np.ndarray = None) -> np.ndarray:
         """
         Args:
             x: (batch, seq_len, d_model)
+            mask: (batch, seq_len) or (batch, 1, seq_len) boolean mask where True indicates valid positions
         Returns:
             output: (batch, seq_len, d_model)
         """
@@ -534,6 +535,17 @@ class MultiHeadAttention:
 
         # Attention scores
         scores = (q @ k.transpose(0, 1, 3, 2)) * self.scale  # (B, H, N, N)
+
+        # Apply mask if provided
+        if mask is not None:
+            # Reshape mask: (B, N) -> (B, 1, 1, N) for broadcasting
+            if mask.ndim == 2:
+                mask = mask[:, np.newaxis, np.newaxis, :]
+            elif mask.ndim == 3:
+                mask = mask[:, np.newaxis, :, :]
+            # Mask out invalid positions by setting scores to large negative value
+            scores = np.where(mask, scores, -1e9)
+
         attn = self.softmax.forward(scores)
         attn = self.attn_dropout.forward(attn)
 
@@ -553,6 +565,7 @@ class MultiHeadAttention:
             'scores': scores,
             'attn': attn,
             'context': context,
+            'mask': mask,
             'B': B, 'N': N, 'D': D
         }
 

@@ -16,24 +16,27 @@ from torch.utils.data import DataLoader
 from dataset import DigitsStrokeDataset
 
 
-def numpy_from_dataloader(dataloader) -> Tuple[np.ndarray, np.ndarray]:
+def numpy_from_dataloader(dataloader) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """convert PyTorch dataloader batch to numpy arrays"""
 
     all_data = []
     all_labels = []
+    all_masks = []
 
-    for batch_data, batch_labels in dataloader:
+    for batch_data, batch_labels, batch_masks in dataloader:
         # convert to numpy
         all_data.append(batch_data.numpy())
         all_labels.append(batch_labels.numpy())
+        all_masks.append(batch_masks.numpy())
 
     data = np.concatenate(all_data, axis=0)
     labels = np.concatenate(all_labels, axis=0)
+    masks = np.concatenate(all_masks, axis=0)
 
-    return data, labels
+    return data, labels, masks
 
 
-def evaluate(model: Transformer, data: np.ndarray, labels: np.ndarray,
+def evaluate(model: Transformer, data: np.ndarray, labels: np.ndarray, masks: np.ndarray,
              batch_size: int = 32) -> Tuple[float, float]:
     """evaluate model on dataset"""
     model.eval()
@@ -52,9 +55,10 @@ def evaluate(model: Transformer, data: np.ndarray, labels: np.ndarray,
 
         batch_data = data[start_idx:end_idx]
         batch_labels = labels[start_idx:end_idx]
+        batch_masks = masks[start_idx:end_idx]
 
         # forward pass (no gradient)
-        logits = model.forward(batch_data, training=False)
+        logits = model.forward(batch_data, mask=batch_masks, training=False)
 
         # loss
         loss = criterion.forward(logits, batch_labels)
@@ -210,7 +214,7 @@ def freeze_parameters(model: Transformer, freeze_encoder: bool = False, freeze_l
 
 
 def train_epoch(model: Transformer, optimizer: SGD,
-                train_data: np.ndarray, train_labels: np.ndarray,
+                train_data: np.ndarray, train_labels: np.ndarray, train_masks: np.ndarray,
                 batch_size: int = 32) -> Tuple[float, float]:
     """train for one epoch"""
     model.train()
@@ -232,12 +236,13 @@ def train_epoch(model: Transformer, optimizer: SGD,
         batch_indices = indices[start_idx:end_idx]
         batch_data = train_data[batch_indices]
         batch_labels = train_labels[batch_indices]
+        batch_masks = train_masks[batch_indices]
 
         # zero gradients
         optimizer.zero_grad()
 
         # forward pass
-        logits = model.forward(batch_data, training=True)
+        logits = model.forward(batch_data, mask=batch_masks, training=True)
 
         # compute loss
         loss = criterion.forward(logits, batch_labels)
@@ -343,7 +348,8 @@ def train_fold(fold, train_files, val_files, args, output_dir, input_dim):
         file_list=train_files,
         augmentation=augmentation,
         movement_features=movement_features,
-        training=True
+        training=True,
+        use_resample=args.use_resample
     )
     val_dataset = DigitsStrokeDataset(
         args.data_dir,
@@ -351,7 +357,10 @@ def train_fold(fold, train_files, val_files, args, output_dir, input_dim):
         file_list=val_files,
         augmentation=None,
         movement_features=movement_features,
-        training=False
+        training=False,
+        use_resample=args.use_resample,
+        feature_mean=train_dataset.feature_mean,
+        feature_std=train_dataset.feature_std
     )
 
     # Create dataloaders
@@ -362,8 +371,8 @@ def train_fold(fold, train_files, val_files, args, output_dir, input_dim):
 
     # Convert to numpy
     print("Converting data to numpy...")
-    train_data, train_labels = numpy_from_dataloader(train_loader)
-    val_data, val_labels = numpy_from_dataloader(val_loader)
+    train_data, train_labels, train_masks = numpy_from_dataloader(train_loader)
+    val_data, val_labels, val_masks = numpy_from_dataloader(val_loader)
     print(f"Train: {train_data.shape}, Val: {val_data.shape}")
 
     # Create model
@@ -397,12 +406,12 @@ def train_fold(fold, train_files, val_files, args, output_dir, input_dim):
 
         # Train
         train_loss, train_acc = train_epoch(
-            model, optimizer, train_data, train_labels, args.batch_size
+            model, optimizer, train_data, train_labels, train_masks, args.batch_size
         )
 
         # Validate
         val_loss, val_acc = evaluate(
-            model, val_data, val_labels, args.batch_size
+            model, val_data, val_labels, val_masks, args.batch_size
         )
 
         epoch_time = time.time() - epoch_start
@@ -461,7 +470,7 @@ def train_fold(fold, train_files, val_files, args, output_dir, input_dim):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Train Transformer with N-Fold Cross Validation')
+    parser = argparse.ArgumentParser(description='Train Transformer with N-Fold Cross Validation (with Mask)')
     parser.add_argument('--data_dir', type=str, default='../../digits_3d/training_data',
                         help='Path to training data')
     parser.add_argument('--epochs', type=int, default=50, help='Number of epochs')
@@ -495,8 +504,13 @@ def main():
                         choices=['light', 'medium', 'strong', 'none'],
                         help='Data augmentation strength (default: None)')
     parser.add_argument('--movement_features', type=str, default=None,
-                        choices=['concat', 'replace', 'all', 'velocity_acceleration', 'acceleration_only', 'none'],
-                        help='Movement feature extraction (default: None)')
+                        choices=['none', 'cat_move', 'cat_dir', 'all'],
+                        help='Movement feature extraction: none (3D), cat_move (6D), cat_dir (9D), all (12D)')
+    parser.add_argument('--use_resample', action='store_true',
+                        help='Use interpolation resampling instead of padding (all positions valid, no masking)')
+    parser.add_argument('--resample_method', type=str, default='arclength',
+                        choices=['temporal', 'arclength'],
+                        help='Resampling method: temporal (equal-time) or arclength (equal-distance)')
 
     # model architecture options
     parser.add_argument('--pos_encoding', type=str, default='sinusoidal',
@@ -521,7 +535,7 @@ def main():
 
     # create output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = Path(f'outputs/nfold_ce_{args.n_folds}fold_{timestamp}')
+    output_dir = Path(f'outputs/nfold_mask_ce_{args.n_folds}fold_{timestamp}')
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # save args
@@ -540,7 +554,8 @@ def main():
         seq_len=args.seq_len,
         augmentation=None,
         movement_features=None,
-        training=False
+        training=False,
+        use_resample=False
     )
 
     # Get input dimension
@@ -552,6 +567,10 @@ def main():
     print(f"Input dimension: {input_dim}")
     print(f"Movement features: {movement_features if movement_features else 'None'}")
     print(f"Positional encoding: {args.pos_encoding}")
+    if args.use_resample:
+        print(f"Using interpolation resampling (no padding/masking)")
+    else:
+        print(f"Using padding with masking for variable-length sequences")
 
     # Create N-fold splits
     indices = np.random.permutation(len(full_dataset))
@@ -612,6 +631,7 @@ def main():
     print(f"\nResults saved to: {output_dir}")
     print("="*60)
     print("\n✅ All gradients were computed MANUALLY")
+    print("✅ Using masking for variable-length sequences")
     print("✅ No PyTorch autograd was used!")
     print("="*60)
 

@@ -74,7 +74,7 @@ class AirWritingAugmentation:
             points = self.random_dropout(points)
 
         return points
-    
+
     def random_rotation_xy(self, points: np.ndarray) -> np.ndarray:
         """
         Random rotation in the XY plane (around Z-axis).
@@ -346,55 +346,90 @@ class CutMix:
 
 class MovementFeatureExtractor:
     """
-    Extract movement features from temporal point cloud data
+    Extract rich geometric + dynamic features for handwriting trajectory.
 
-    Computes velocity/displacement features: dx, dy, dz = (x,y,z)_t - (x,y,z)_(t-1)
-    and concatenates them with the original position at each timestep.
-
-    This captures motion dynamics which are important for handwriting recognition.
+    Modes:
+        - 'none': Only position (x, y, z) -> 3D
+        - 'cat_move': Position + displacement (x, y, z, dx, dy, dz) -> 6D
+        - 'cat_dir': Position + displacement + direction (x, y, z, dx, dy, dz, dir_x, dir_y, dir_z) -> 9D
+        - 'all': Full features (x, y, z, dx, dy, dz, dir_x, dir_y, dir_z, curvature, s_norm, total_length) -> 12D
     """
 
-    def __init__(self, mode: str = 'concat'):
+    def __init__(self, mode: str = 'none'):
         """
         Args:
-            mode: 'concat' - concatenate [x,y,z,dx,dy,dz] -> 6D
-                  'replace' - replace with [dx,dy,dz] -> 3D
-                  'velocity_only' - return only velocity features
+            mode: Feature extraction mode
+                  'none' - Only position [x,y,z] -> 3D
+                  'cat_move' - Position + movement [x,y,z,dx,dy,dz] -> 6D
+                  'cat_dir' - Position + movement + direction [x,y,z,dx,dy,dz,dir_x,dir_y,dir_z] -> 9D
+                  'all' - All features [x,y,z,dx,dy,dz,dir_x,dir_y,dir_z,cur,snorm,tlen] -> 12D
         """
+        assert mode in ['none', 'cat_move', 'cat_dir', 'all'], \
+            f"Unknown mode: {mode}. Must be one of: none, cat_move, cat_dir, all"
         self.mode = mode
 
     def __call__(self, points: np.ndarray) -> np.ndarray:
         """
-        Extract movement features from point cloud
+        Extract features from trajectory
 
         Args:
-            points: (N, 3) temporal point cloud [x, y, z] at each timestep
+            points: (N, 3) xyz sequence
         Returns:
-            features: (N, 3 or 6) depending on mode
-                      - concat: (N, 6) [x, y, z, dx, dy, dz]
-                      - replace: (N, 3) [dx, dy, dz]
+            features: (N, 3/6/9/12) feature matrix depending on mode
         """
-        n_points = len(points)
+        pts = points.astype(np.float32)
+        N = len(pts)
 
-        # Compute displacement: (x,y,z)_t - (x,y,z)_(t-1)
-        # For t=0, use zero displacement (no previous point)
-        displacements = np.zeros_like(points)
-        displacements[1:] = points[1:] - points[:-1]  # dx, dy, dz for t >= 1
+        # Base: Position
+        x = pts[:, 0]
+        y = pts[:, 1]
+        z = pts[:, 2]
 
+        if self.mode == 'none':
+            # Only position
+            return np.stack([x, y, z], axis=1)  # (N, 3)
 
-        if self.mode == 'concat':
-            # Concatenate position and velocity: [x, y, z, dx, dy, dz]
-            features = np.concatenate([points, displacements], axis=-1)  # (N, 6)
-        elif self.mode == 'replace':
-            # Replace with velocity only: [dx, dy, dz]
-            features = displacements  # (N, 3)
-        elif self.mode == 'velocity_only':
-            # Only velocity features (same as replace)
-            features = displacements  # (N, 3)
-        else:
-            raise ValueError(f"Unknown mode: {self.mode}")
+        # Compute displacement
+        disp = np.zeros_like(pts)
+        disp[1:] = pts[1:] - pts[:-1]
+        dx, dy, dz = disp[:, 0], disp[:, 1], disp[:, 2]
 
-        return features.astype(np.float32)
+        if self.mode == 'cat_move':
+            # Position + displacement
+            return np.stack([x, y, z, dx, dy, dz], axis=1)  # (N, 6)
+
+        # Compute unit direction vector
+        step = np.linalg.norm(disp, axis=1, keepdims=True) + 1e-8
+        dir_vec = disp / step
+        dir_x, dir_y, dir_z = dir_vec[:, 0], dir_vec[:, 1], dir_vec[:, 2]
+
+        if self.mode == 'cat_dir':
+            # Position + displacement + direction
+            return np.stack([x, y, z, dx, dy, dz, dir_x, dir_y, dir_z], axis=1)  # (N, 9)
+
+        # Compute curvature-like feature
+        ddir = np.zeros_like(dir_vec)
+        ddir[1:] = dir_vec[1:] - dir_vec[:-1]
+        curvature_like = np.linalg.norm(ddir, axis=1)
+
+        # Compute normalized arc-length
+        seg_len = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+        cumulative = np.insert(np.cumsum(seg_len), 0, 0)
+        total_length = cumulative[-1] + 1e-8
+        s_norm = cumulative / total_length
+
+        # Total length as a feature
+        total_len_feat = np.full((N,), total_length, dtype=np.float32)
+
+        # All features
+        return np.stack([
+            x, y, z,
+            dx, dy, dz,
+            dir_x, dir_y, dir_z,
+            curvature_like,
+            s_norm,
+            total_len_feat
+        ], axis=1)  # (N, 12)
 
 
 class AccelerationFeatureExtractor:
@@ -447,6 +482,7 @@ class AccelerationFeatureExtractor:
 
         return features.astype(np.float32)
 
+
 def get_input_dim(movement_features: str = None) -> int:
     """
     Helper function to determine input dimension based on movement features
@@ -455,20 +491,21 @@ def get_input_dim(movement_features: str = None) -> int:
         movement_features: Movement feature mode
 
     Returns:
-        input_dim: 3, 6, or 9
+        input_dim: 3, 6, 9, or 12
 
     Examples:
-        input_dim = get_input_dim('concat')  # Returns 6
-        input_dim = get_input_dim('all')     # Returns 9
-        input_dim = get_input_dim(None)      # Returns 3
+        input_dim = get_input_dim('none')        # Returns 3
+        input_dim = get_input_dim('cat_move')    # Returns 6
+        input_dim = get_input_dim('cat_dir')     # Returns 9
+        input_dim = get_input_dim('all')         # Returns 12
     """
-    if movement_features in ['concat']:
-        return 6
-    elif movement_features in ['all']:
-        return 9
-    elif movement_features in ['velocity_acceleration']:
-        return 6
-    elif movement_features in [None, 'none', 'replace', 'velocity_only', 'acceleration_only']:
+    if movement_features in ['none', None, 'replace', 'velocity_only', 'acceleration_only']:
         return 3
+    elif movement_features in ['cat_move', 'concat', 'velocity_acceleration']:
+        return 6
+    elif movement_features in ['cat_dir']:
+        return 9
+    elif movement_features in ['all']:
+        return 12
     else:
         raise ValueError(f"Unknown movement features mode: {movement_features}")

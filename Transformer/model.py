@@ -134,16 +134,17 @@ class TransformerEncoderLayer:
         # self.ffn = MLP(d_model, mlp_ratio, dropout)
         self.ffn = SwiGLU(d_model, mlp_ratio, dropout)
 
-    def forward(self, x: np.ndarray) -> np.ndarray:
+    def forward(self, x: np.ndarray, mask: np.ndarray = None) -> np.ndarray:
         """
         Args:
             x: (batch, seq_len, d_model)
+            mask: (batch, seq_len) boolean mask where True indicates valid positions
         Returns:
             output: (batch, seq_len, d_model)
         """
         # Self-attention with residual
         attn_input = self.norm1.forward(x)
-        attn_output = self.attn.forward(attn_input)
+        attn_output = self.attn.forward(attn_input, mask=mask)
         x = x + attn_output  # Residual connection
 
         # Feed-forward with residual
@@ -241,12 +242,13 @@ class Transformer:
         # Cache for backward
         self.cache = {}
 
-    def forward(self, x: np.ndarray, training: bool = True) -> np.ndarray:
+    def forward(self, x: np.ndarray, mask: np.ndarray = None, training: bool = True) -> np.ndarray:
         """
         Forward pass
 
         Args:
             x: (batch, seq_len, input_dim)
+            mask: (batch, seq_len) boolean mask where True indicates valid positions
             training: whether in training mode (affects dropout)
         Returns:
             logits: (batch, num_classes)
@@ -266,13 +268,18 @@ class Transformer:
         cls_tokens = np.tile(self.cls_token.data, (batch_size, 1, 1))  # (batch, 1, d_model)
         x = np.concatenate([cls_tokens, x], axis=1)  # (batch, seq_len+1, d_model)
 
+        # Update mask to account for CLS token (CLS is always valid)
+        if mask is not None:
+            cls_mask = np.ones((batch_size, 1), dtype=mask.dtype)
+            mask = np.concatenate([cls_mask, mask], axis=1)  # (batch, seq_len+1)
+
         # Add positional encoding
         x = self.pos_encoder.forward(x)  # (batch, seq_len+1, d_model)
         self.cache['after_pos'] = x
 
         # Transformer layers
         for layer in self.layers:
-            x = layer.forward(x)
+            x = layer.forward(x, mask=mask)
 
         # Extract CLS token output
         cls_out = x[:, 0, :]  # (batch, d_model)

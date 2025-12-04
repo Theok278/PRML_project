@@ -84,9 +84,11 @@ def load_model_from_checkpoint(checkpoint_path: Path):
     mlp_ratio = args.get('mlp_ratio', None)
     pos_encoding = args.get('pos_encoding', 'sinusoidal')
 
-    # 这两项完全从 checkpoint 里读
+    # 这些项完全从 checkpoint 里读
     seq_len = args.get('seq_len', 128)
     movement_features = args.get('movement_features', None)
+    use_resample = args.get('use_resample', False)
+    resample_method = args.get('resample_method', 'arclength')
 
     # 判断是否为 SupCon 模型
     is_supcon = 'supcon_weight' in args or 'projection_dim' in args
@@ -104,6 +106,9 @@ def load_model_from_checkpoint(checkpoint_path: Path):
     print(f"  pos_encoding: {pos_encoding}")
     print(f"  seq_len: {seq_len}")
     print(f"  movement_features: {movement_features}")
+    print(f"  use_resample: {use_resample}")
+    if use_resample:
+        print(f"  resample_method: {resample_method}")
     if is_supcon:
         print(f"  supcon_weight: {supcon_weight}")
         print(f"  temperature: {temperature}")
@@ -159,6 +164,8 @@ def load_model_from_checkpoint(checkpoint_path: Path):
     config = {
         "seq_len": seq_len,
         "movement_features": movement_features,
+        "use_resample": use_resample,
+        "resample_method": resample_method,
         "input_dim": input_dim,
         "d_model": d_model,
         "model_type": model_type,
@@ -181,13 +188,22 @@ class DigitClassifier:
         )
         self.seq_len = self.config["seq_len"]
         self.movement_features = self.config["movement_features"]
+        self.use_resample = self.config["use_resample"]
+        self.resample_method = self.config["resample_method"]
         self.input_dim = self.config["input_dim"]
 
     def preprocess(self, testdata):
-        from dataset import resample_points, pretreat_points
+        from dataset import (
+            GLOBAL_MEAN_3, GLOBAL_STD_3,
+            GLOBAL_MEAN_6, GLOBAL_STD_6,
+            GLOBAL_MEAN_9, GLOBAL_STD_9,
+            GLOBAL_MEAN_12, GLOBAL_STD_12,
+            resample_points
+        )
+        from augmentation import MovementFeatureExtractor, get_input_dim
         import numpy as np
 
-        # ==== 下面这段直接沿用你原来的逻辑 ====
+        # 输入数据验证和转换
         if isinstance(testdata, (str, Path)):
             testdata = np.loadtxt(testdata, delimiter=",")
         elif isinstance(testdata, (list, tuple)):
@@ -214,61 +230,94 @@ class DigitClassifier:
                 f"testdata must have at least 2 points. Got {testdata.shape[0]} points"
             )
 
-        testdata = testdata.astype(np.float32)
+        pts = testdata.astype(np.float32)
 
-        # 重采样到 seq_len（从 checkpoint 里的 args 读出来的）
-        resampled = resample_points(testdata, self.seq_len)
+        # 1. 重采样（如果训练时使用了resample）⭐ 关键：必须与训练时一致
+        if self.use_resample:
+            pts = resample_points(pts, self.seq_len)
 
-        # 归一化（与训练时保持一致）
-        resampled = pretreat_points(resampled, normalization=True)
+        # 2. 提取运动特征（使用与训练时一致的 MovementFeatureExtractor）
+        if self.movement_features is not None:
+            if self.movement_features not in ['none', 'cat_move', 'cat_dir', 'all']:
+                raise ValueError(
+                    f"Unknown movement_features: {self.movement_features}. "
+                    f"Must be one of: 'none', 'cat_move', 'cat_dir', 'all'"
+                )
+            feature_extractor = MovementFeatureExtractor(mode=self.movement_features)
+            features = feature_extractor(pts)  # (N, feat_dim)
+        else:
+            # 没有特征提取，直接使用原始xyz
+            features = pts  # (N, 3)
 
-        # movement_features 也从 args 决定
-        if self.movement_features == 'concat':
-            velocity = np.diff(resampled, axis=0, prepend=resampled[0:1])
-            resampled = np.concatenate([resampled, velocity], axis=1)
+        # 3. 归一化（使用全局统计量）
+        if self.movement_features == 'all':
+            features = (features - GLOBAL_MEAN_12) / GLOBAL_STD_12
+        elif self.movement_features == 'cat_dir':
+            features = (features - GLOBAL_MEAN_9) / GLOBAL_STD_9
+        elif self.movement_features == 'cat_move':
+            features = (features - GLOBAL_MEAN_6) / GLOBAL_STD_6
+        elif self.movement_features == 'none':
+            features = (features - GLOBAL_MEAN_3) / GLOBAL_STD_3
+        # else: 如果movement_features=None，不进行归一化
 
-        elif self.movement_features == 'replace':
-            velocity = np.diff(resampled, axis=0, prepend=resampled[0:1])
-            resampled = velocity
+        # 4. Padding或截断到seq_len（如果没有使用resample）
+        if self.use_resample:
+            # 已经重采样到seq_len，所有位置都有效
+            T = features.shape[0]
+            if T != self.seq_len:
+                # 理论上不该发生，但为了稳定性
+                if T > self.seq_len:
+                    features = features[:self.seq_len]
+                    mask = np.ones(self.seq_len, dtype=bool)
+                else:
+                    pad_len = self.seq_len - T
+                    features = np.pad(features, ((0, pad_len), (0, 0)), mode='constant', constant_values=0)
+                    mask = np.concatenate([np.ones(T, dtype=bool),
+                                          np.zeros(pad_len, dtype=bool)])
+            else:
+                mask = np.ones(self.seq_len, dtype=bool)
+        else:
+            # 使用padding/truncation
+            actual_len = features.shape[0]
+            if actual_len > self.seq_len:
+                # 截断
+                features = features[:self.seq_len]
+                mask = np.ones(self.seq_len, dtype=bool)
+            elif actual_len < self.seq_len:
+                # Padding
+                pad_len = self.seq_len - actual_len
+                features = np.pad(features, ((0, pad_len), (0, 0)), mode='constant', constant_values=0)
+                mask = np.concatenate([np.ones(actual_len, dtype=bool),
+                                      np.zeros(pad_len, dtype=bool)])
+            else:
+                mask = np.ones(self.seq_len, dtype=bool)
 
-        elif self.movement_features == 'all':
-            velocity = np.diff(resampled, axis=0, prepend=resampled[0:1])
-            acceleration = np.diff(velocity, axis=0, prepend=velocity[0:1])
-            resampled = np.concatenate([resampled, velocity, acceleration], axis=1)
+        # 5. 转换为batch format
+        batch_data = features[np.newaxis, ...]  # (1, seq_len, feat_dim)
+        batch_mask = mask[np.newaxis, ...]      # (1, seq_len)
 
-        elif self.movement_features == 'velocity_acceleration':
-            velocity = np.diff(resampled, axis=0, prepend=resampled[0:1])
-            acceleration = np.diff(velocity, axis=0, prepend=velocity[0:1])
-            resampled = np.concatenate([velocity, acceleration], axis=1)
-
-        elif self.movement_features == 'acceleration_only':
-            velocity = np.diff(resampled, axis=0, prepend=resampled[0:1])
-            acceleration = np.diff(velocity, axis=0, prepend=velocity[0:1])
-            resampled = acceleration
-
-        batch_data = resampled[np.newaxis, ...]
-        return batch_data
+        return batch_data, batch_mask
 
     def classify(self, testdata) -> int:
-        batch_data = self.preprocess(testdata)
+        batch_data, batch_mask = self.preprocess(testdata)
 
         if self.model_type == "supcon":
-            output = self.model.forward(batch_data, training=False, return_embeddings=False)
+            output = self.model.forward(batch_data, mask=batch_mask, training=False, return_embeddings=False)
             logits = output
         else:
-            logits = self.model.forward(batch_data, training=False)
+            logits = self.model.forward(batch_data, mask=batch_mask, training=False)
 
         predicted_class = int(np.argmax(logits[0]))
         return predicted_class
 
     def classify_with_confidence(self, testdata):
-        batch_data = self.preprocess(testdata)
+        batch_data, batch_mask = self.preprocess(testdata)
 
         if self.model_type == "supcon":
-            output = self.model.forward(batch_data, training=False, return_embeddings=False)
+            output = self.model.forward(batch_data, mask=batch_mask, training=False, return_embeddings=False)
             logits = output
         else:
-            logits = self.model.forward(batch_data, training=False)
+            logits = self.model.forward(batch_data, mask=batch_mask, training=False)
 
         exp_logits = np.exp(logits[0] - np.max(logits[0]))
         probabilities = exp_logits / np.sum(exp_logits)

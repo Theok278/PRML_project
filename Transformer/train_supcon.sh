@@ -9,7 +9,7 @@ echo "=========================================="
 python train_supcon.py \
     --data_dir ../../digits_3d/training_data \
     --augmentation light \
-    --movement_features concat \
+    --movement_features none \
     --optimizer adamw \
     --scheduler warmup_cosine \
     --pos_encoding sinusoidal \
@@ -29,8 +29,7 @@ python train_supcon.py \
     --temperature 0.05 \
     --projection_dim 32 \
     --projection_hidden_dim 32 \
-    --n_folds 5 \
-    --seed 0
+    --seed 42
 
 if [ $? -eq 0 ]; then
     echo ""

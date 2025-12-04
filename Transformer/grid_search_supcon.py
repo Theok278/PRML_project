@@ -87,26 +87,30 @@ def create_k_folds(file_list: List[str], labels: List[int],
 # ------------------------------
 # 和训练脚本一致的工具函数
 # ------------------------------
-def numpy_from_dataloader(dataloader) -> Tuple[np.ndarray, np.ndarray]:
+def numpy_from_dataloader(dataloader) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """convert PyTorch dataloader batch to numpy arrays"""
 
     all_data = []
     all_labels = []
+    all_masks = []
 
-    for batch_data, batch_labels in dataloader:
+    for batch_data, batch_labels, batch_masks in dataloader:
         # convert to numpy
         all_data.append(batch_data.numpy())
         all_labels.append(batch_labels.numpy())
+        all_masks.append(batch_masks.numpy())
 
     data = np.concatenate(all_data, axis=0)
     labels = np.concatenate(all_labels, axis=0)
+    masks = np.concatenate(all_masks, axis=0)
 
-    return data, labels
+    return data, labels, masks
 
 
 def evaluate(model,
              data: np.ndarray,
              labels: np.ndarray,
+             masks: np.ndarray,
              batch_size: int = 32,
              is_supcon: bool = False) -> Tuple[float, float]:
     """evaluate model on dataset"""
@@ -126,14 +130,15 @@ def evaluate(model,
 
         batch_data = data[start_idx:end_idx]
         batch_labels = labels[start_idx:end_idx]
+        batch_masks = masks[start_idx:end_idx]
 
         # forward pass (no gradient)
         if is_supcon:
             # SupCon 模型：只要 logits，不要 embeddings
-            logits = model.forward(batch_data, training=False, return_embeddings=False)
+            logits = model.forward(batch_data, mask=batch_masks, training=False, return_embeddings=False)
         else:
             # 普通 Transformer
-            logits = model.forward(batch_data, training=False)
+            logits = model.forward(batch_data, mask=batch_masks, training=False)
 
         # loss
         loss = criterion.forward(logits, batch_labels)
@@ -150,7 +155,7 @@ def evaluate(model,
 
 
 def train_epoch(model: Transformer, optimizer,
-                train_data: np.ndarray, train_labels: np.ndarray,
+                train_data: np.ndarray, train_labels: np.ndarray, train_masks: np.ndarray,
                 batch_size: int = 32) -> Tuple[float, float]:
     """train for one epoch (和训练脚本一致，不在这里用 scheduler)"""
     model.train()
@@ -172,12 +177,13 @@ def train_epoch(model: Transformer, optimizer,
         batch_indices = indices[start_idx:end_idx]
         batch_data = train_data[batch_indices]
         batch_labels = train_labels[batch_indices]
+        batch_masks = train_masks[batch_indices]
 
         # zero gradients
         optimizer.zero_grad()
 
         # forward pass
-        logits = model.forward(batch_data, training=True)
+        logits = model.forward(batch_data, mask=batch_masks, training=True)
 
         # compute loss
         loss = criterion.forward(logits, batch_labels)
@@ -205,6 +211,7 @@ def train_epoch_supcon(
     optimizer,
     train_data: np.ndarray,
     train_labels: np.ndarray,
+    train_masks: np.ndarray,
     supcon_loss: SupConLoss,
     ce_loss: CrossEntropyLoss,
     supcon_weight: float,
@@ -231,6 +238,7 @@ def train_epoch_supcon(
         batch_indices = indices[start_idx:end_idx]
         batch_data = train_data[batch_indices]
         batch_labels = train_labels[batch_indices]
+        batch_masks = train_masks[batch_indices]
 
         # zero gradients
         optimizer.zero_grad()
@@ -238,6 +246,7 @@ def train_epoch_supcon(
         # forward: embeddings + logits
         embeddings, logits = model.forward(
             batch_data,
+            mask=batch_masks,
             training=True,
             return_embeddings=True
         )
@@ -295,10 +304,11 @@ def train_single_fold(
     Train model on one fold and return validation metrics
     """
 
-    # 处理 augmentation / movement_features（和主训练脚本一致）
+    # 处理 augmentation / movement_features / use_resample（和主训练脚本一致）
     augmentation = config.get('augmentation')
     movement_features = config.get('movement_features')
-    print(f"Using augmentation: {augmentation}, movement_features: {movement_features}")
+    use_resample = config.get('use_resample', False)  # 消融控制：是否使用resample
+    print(f"Using augmentation: {augmentation}, movement_features: {movement_features}, use_resample: {use_resample}")
 
     # 创建数据集（签名对齐 DigitsStrokeDataset 在训练脚本中的用法）
     train_dataset = DigitsStrokeDataset(
@@ -307,7 +317,8 @@ def train_single_fold(
         file_list=train_files,
         augmentation=augmentation,
         movement_features=movement_features,
-        training=True
+        training=True,
+        use_resample=use_resample
     )
 
     val_dataset = DigitsStrokeDataset(
@@ -316,7 +327,8 @@ def train_single_fold(
         file_list=val_files,
         augmentation=None,  # no augmentation for val
         movement_features=movement_features,
-        training=False
+        training=False,
+        use_resample=use_resample
     )
 
     # DataLoader
@@ -330,8 +342,8 @@ def train_single_fold(
     )
 
     # 转成 numpy（一次性，和训练脚本一致）
-    train_data, train_labels = numpy_from_dataloader(train_loader)
-    val_data, val_labels = numpy_from_dataloader(val_loader)
+    train_data, train_labels, train_masks = numpy_from_dataloader(train_loader)
+    val_data, val_labels, val_masks = numpy_from_dataloader(val_loader)
 
     # 输入维度根据 movement_features 决定
     input_dim = get_input_dim(movement_features)
@@ -434,6 +446,7 @@ def train_single_fold(
                 optimizer=optimizer,
                 train_data=train_data,
                 train_labels=train_labels,
+                train_masks=train_masks,
                 supcon_loss=supcon_loss,
                 ce_loss=ce_loss,
                 supcon_weight=supcon_weight,
@@ -443,13 +456,13 @@ def train_single_fold(
             train_acc = train_stats['accuracy']
         else:
             train_loss, train_acc = train_epoch(
-                model, optimizer, train_data, train_labels,
+                model, optimizer, train_data, train_labels, train_masks,
                 batch_size=config['batch_size']
             )
 
         # 验证
         val_loss, val_acc = evaluate(
-            model, val_data, val_labels,
+            model, val_data, val_labels, val_masks,
             batch_size=config['batch_size'],
             is_supcon=use_supcon
         )
@@ -772,6 +785,12 @@ def main():
     parser.add_argument('--movement_features_values', type=str, nargs='+',
                         help='Movement feature modes to search (e.g. concat replace all none)')
 
+    # 消融控制：是否使用resample
+    parser.add_argument('--use_resample', action='store_true',
+                        help='Use resample (old behavior) instead of padding/truncation')
+    parser.add_argument('--use_resample_values', type=int, nargs='+',
+                        help='Use resample options to search (0=padding/truncation, 1=resample)')
+
     args = parser.parse_args()
 
     # 设置随机种子
@@ -807,20 +826,22 @@ def main():
             'lr': [1e-3],
             'd_model': [64],
             'nhead': [4],
-            'num_layers': [2],
+            'num_layers': [4],
             'dropout': [0.1],
             'weight_decay': [5e-2],
             'optimizer': ['adamw'],
             'scheduler': ['warmup_cosine'],
             'pos_encoding': ['sinusoidal'],
             'mlp_ratio': [None],
-            'augmentation': [None, 'light'],
-            'movement_features': [None, 'concat'],
+            'augmentation': ['light'],
+            'movement_features': ['concat'],
+            # 消融实验：对比 padding/truncation vs resample
+            'use_resample': [False, True],
             # SupCon: 0.0 表示关闭；>0 表示启用 SupCon
-            'supcon_weight': [0.0, 0.3, 0.5, 0.7],
+            'supcon_weight': [0.0, 0.5],
             'temperature': [0.05, 0.07],
-            'projection_dim': [16, 32],
-            'projection_hidden_dim': [32, 64],
+            'projection_dim': [32],
+            'projection_hidden_dim': [32],
         }
         param_grid = None  # 只是为了后面类型一致，不会用到
     else:  # custom / standard / extensive（这里统一走 custom 的逻辑）
@@ -877,6 +898,14 @@ def main():
                 mf_grid.append(m)
         param_grid['movement_features'] = mf_grid
 
+        # 处理 use_resample grid（消融实验）
+        if args.use_resample_values:
+            # 将 int 转换为 bool
+            param_grid['use_resample'] = [bool(v) for v in args.use_resample_values]
+        else:
+            # 默认使用当前 CLI 设置
+            param_grid['use_resample'] = [args.use_resample]
+
         # 其它保持默认或少量搜索
         param_grid['weight_decay'] = [args.weight_decay]
         param_grid['optimizer'] = ['adamw', 'sgd']
@@ -909,7 +938,7 @@ def main():
         #     ['lr', 'weight_decay', 'scheduler', 'optimizer'],
         # ]
         stage_groups: List[List[str]] = [
-            ['d_model', 'nhead', 'num_layers', 'dropout', 'augmentation', 'movement_features', 'mlp_ratio', 'pos_encoding',
+            ['d_model', 'nhead', 'num_layers', 'dropout', 'augmentation', 'movement_features', 'use_resample', 'mlp_ratio', 'pos_encoding',
              'supcon_weight', 'temperature', 'projection_dim', 'projection_hidden_dim',
              'lr', 'weight_decay', 'scheduler', 'optimizer'],
         ]

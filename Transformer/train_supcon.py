@@ -18,26 +18,30 @@ from torch.utils.data import DataLoader
 from dataset import DigitsStrokeDataset
 
 
-def numpy_from_dataloader(dataloader) -> Tuple[np.ndarray, np.ndarray]:
+def numpy_from_dataloader(dataloader) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """convert PyTorch dataloader batch to numpy arrays"""
 
     all_data = []
     all_labels = []
+    all_masks = []
 
-    for batch_data, batch_labels in dataloader:
+    for batch_data, batch_labels, batch_masks in dataloader:
         # convert to numpy
         all_data.append(batch_data.numpy())
         all_labels.append(batch_labels.numpy())
+        all_masks.append(batch_masks.numpy())
 
     data = np.concatenate(all_data, axis=0)
     labels = np.concatenate(all_labels, axis=0)
+    masks = np.concatenate(all_masks, axis=0)
 
-    return data, labels
+    return data, labels, masks
 
 
 def evaluate(model,
              data: np.ndarray,
              labels: np.ndarray,
+             masks: np.ndarray,
              batch_size: int = 32,
              is_supcon: bool = False) -> Tuple[float, float]:
     """evaluate model on dataset"""
@@ -57,13 +61,14 @@ def evaluate(model,
 
         batch_data = data[start_idx:end_idx]
         batch_labels = labels[start_idx:end_idx]
+        batch_masks = masks[start_idx:end_idx]
 
         # forward pass (no gradient)
         if is_supcon:
             # SupCon 模型：只取 logits（不需要 embeddings）
-            logits = model.forward(batch_data, training=False, return_embeddings=False)
+            logits = model.forward(batch_data, mask=batch_masks, training=False, return_embeddings=False)
         else:
-            logits = model.forward(batch_data, training=False)
+            logits = model.forward(batch_data, mask=batch_masks, training=False)
 
         # loss
         loss = criterion.forward(logits, batch_labels)
@@ -224,6 +229,7 @@ def train_epoch(model,
                 optimizer,
                 train_data: np.ndarray,
                 train_labels: np.ndarray,
+                train_masks: np.ndarray,
                 batch_size: int = 32) -> Tuple[float, float]:
     """train for one epoch (CE-only)"""
     model.train()
@@ -245,12 +251,13 @@ def train_epoch(model,
         batch_indices = indices[start_idx:end_idx]
         batch_data = train_data[batch_indices]
         batch_labels = train_labels[batch_indices]
+        batch_masks = train_masks[batch_indices]
 
         # zero gradients
         optimizer.zero_grad()
 
         # forward pass
-        logits = model.forward(batch_data, training=True)
+        logits = model.forward(batch_data, mask=batch_masks, training=True)
 
         # compute loss
         loss = criterion.forward(logits, batch_labels)
@@ -277,6 +284,7 @@ def train_epoch_supcon(model: TransformerSupCon,
                        optimizer,
                        train_data: np.ndarray,
                        train_labels: np.ndarray,
+                       train_masks: np.ndarray,
                        supcon_loss: SupConLoss,
                        ce_loss: CrossEntropyLoss,
                        supcon_weight: float,
@@ -307,6 +315,7 @@ def train_epoch_supcon(model: TransformerSupCon,
         batch_indices = indices[start_idx:end_idx]
         batch_data = train_data[batch_indices]
         batch_labels = train_labels[batch_indices]
+        batch_masks = train_masks[batch_indices]
 
         # zero gradients
         optimizer.zero_grad()
@@ -314,6 +323,7 @@ def train_epoch_supcon(model: TransformerSupCon,
         # forward pass: 得到 embeddings + logits
         embeddings, logits = model.forward(
             batch_data,
+            mask=batch_masks,
             training=True,
             return_embeddings=True
         )
@@ -394,9 +404,15 @@ def main():
                         choices=['light', 'medium', 'strong', 'none'],
                         help='Data augmentation strength (default: None)')
     parser.add_argument('--movement_features', type=str, default=None,
-                        choices=['concat', 'replace', 'all',
-                                 'velocity_acceleration', 'acceleration_only', 'none'],
-                        help='Movement feature extraction (default: None)')
+                        choices=['none', 'cat_move', 'cat_dir', 'all'],
+                        help='Movement feature extraction: none (3D), cat_move (6D), cat_dir (9D), all (12D)')
+    parser.add_argument('--use_resample', action='store_true',
+                        help='Use interpolation resampling instead of padding (all positions valid, no masking)')
+    parser.add_argument('--resample_method', type=str, default='arclength',
+                        choices=['temporal', 'arclength'],
+                        help='Resampling method: temporal (equal-time) or arclength (equal-distance)')
+    parser.add_argument('--use_global_stats', action='store_true',
+                        help='Use predefined global statistics (GLOBAL_MEAN_12/GLOBAL_STD_12) for single training (non-CV)')
 
     # model architecture options
     parser.add_argument('--pos_encoding', type=str, default='sinusoidal',
@@ -445,9 +461,20 @@ def main():
     # load data using PyTorch DataLoader (only for convenience)
     print("\nLoading data...")
 
-    # Handle augmentation and movement features arguments
+    # Handle augmentation argument
+    # Note: augmentation='none' means no augmentation, so convert to None
     augmentation = args.augmentation if args.augmentation != 'none' else None
-    movement_features = args.movement_features if args.movement_features != 'none' else None
+
+    # movement_features can be 'none', 'cat_move', 'cat_dir', 'all', or None
+    # 'none' (string) means extract only x,y,z features (with normalization)
+    # None (Python None) means no feature extraction at all (no normalization)
+    # DO NOT convert 'none' string to None!
+    movement_features = args.movement_features
+
+    if args.use_resample:
+        print("  Using interpolation resampling (no padding/masking)")
+    else:
+        print("  Using padding with masking for variable-length sequences")
 
     # Create full dataset to get file list
     full_dataset = DigitsStrokeDataset(
@@ -455,7 +482,8 @@ def main():
         seq_len=args.seq_len,
         augmentation=None,
         movement_features=None,
-        training=False
+        training=False,
+        use_resample=False  # No resampling for getting file list
     )
 
     # split into train/val
@@ -477,7 +505,10 @@ def main():
         file_list=train_files,
         augmentation=augmentation,            # Use augmentation for training
         movement_features=movement_features,  # Use movement features for training
-        training=True
+        training=True,
+        use_resample=args.use_resample,       # Use resampling if enabled
+        resample_method=args.resample_method,
+        use_global_stats=args.use_global_stats  # Use global stats if enabled
     )
     val_dataset = DigitsStrokeDataset(
         args.data_dir,
@@ -485,7 +516,12 @@ def main():
         file_list=val_files,
         augmentation=None,                   # No augmentation for validation
         movement_features=movement_features, # But keep movement features for validation
-        training=False
+        training=False,
+        use_resample=args.use_resample,      # Same as training for consistency
+        resample_method=args.resample_method,
+        use_global_stats=args.use_global_stats,  # Use same global stats if enabled
+        feature_mean=train_dataset.feature_mean if not args.use_global_stats else None,
+        feature_std=train_dataset.feature_std if not args.use_global_stats else None
     )
 
     # create dataloaders
@@ -496,8 +532,8 @@ def main():
 
     # convert to numpy arrays (do this once to avoid repeated conversion)
     print("Converting data to numpy...")
-    train_data, train_labels = numpy_from_dataloader(train_loader)
-    val_data, val_labels = numpy_from_dataloader(val_loader)
+    train_data, train_labels, train_masks = numpy_from_dataloader(train_loader)
+    val_data, val_labels, val_masks = numpy_from_dataloader(val_loader)
 
     print(f"Train: {train_data.shape}, Val: {val_data.shape}")
 
@@ -630,6 +666,7 @@ def main():
                 optimizer=optimizer,
                 train_data=train_data,
                 train_labels=train_labels,
+                train_masks=train_masks,
                 supcon_loss=supcon_loss,
                 ce_loss=ce_loss,
                 supcon_weight=args.supcon_weight,
@@ -639,12 +676,12 @@ def main():
             train_acc = train_stats['accuracy']
         else:
             train_loss, train_acc = train_epoch(
-                model, optimizer, train_data, train_labels, args.batch_size
+                model, optimizer, train_data, train_labels, train_masks, args.batch_size
             )
 
         # validate
         val_loss, val_acc = evaluate(
-            model, val_data, val_labels, args.batch_size, is_supcon=use_supcon
+            model, val_data, val_labels, val_masks, args.batch_size, is_supcon=use_supcon
         )
 
         epoch_time = time.time() - epoch_start
